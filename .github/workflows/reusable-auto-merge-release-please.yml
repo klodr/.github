@@ -44,10 +44,10 @@ permissions:
 jobs:
   auto-merge:
     name: Auto-merge release-please PR
-    # Filter: only PRs opened by the release-please-app[bot]. The PR
+    # Filter: only PRs opened by the klodr-release-please[bot]. The PR
     # author is set when the App pushes the branch with its installation
     # token. Any other PR (human, dependabot, etc.) is a no-op.
-    if: github.event.pull_request.user.login == 'release-please-app[bot]'
+    if: github.event.pull_request.user.login == 'klodr-release-please[bot]'
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
