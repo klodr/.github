@@ -1,0 +1,86 @@
+# CodeRabbit configuration
+# Docs: https://docs.coderabbit.ai/guides/configure-coderabbit
+#
+# klodr/.github is a low-volume meta-repo: org-level community files
+# + reusable workflows + composite actions consumed by the 5 klodr/*
+# downstream repos. A bad change here cascades into every consumer's
+# CI — assertive review is mandatory.
+
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: true
+  high_level_summary: true
+  high_level_summary_in_walkthrough: true
+  poem: false
+  in_progress_fortune: false
+  review_status: true
+  collapse_walkthrough: false
+  abort_on_close: true
+
+  auto_title_instructions: |
+    Use Conventional Commits format: <type>[(<scope>)]: <subject>
+    Types: feat, fix, docs, chore, refactor, test, ci, build, perf, revert.
+    Scope is optional.
+    Cap the entire title (including type and optional scope) at 72 characters.
+
+  auto_review:
+    enabled: true
+    drafts: false
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+    base_branches:
+      - main
+
+  pre_merge_checks:
+    docstrings:
+      mode: off
+    title:
+      mode: error
+      requirements: |
+        Conventional Commits format: <type>[(<scope>)]: <subject>.
+        Types: feat, fix, docs, chore, refactor, test, ci, build, perf, revert.
+        Scope is optional.
+        Subject must be in imperative mood, lowercase, no trailing period.
+        Total title length (including type/scope) must be <= 72 characters.
+    # Reviewer requested via GitHub UI must not be substituted by the bot.
+    override_requested_reviewers_only: true
+
+  path_instructions:
+    - path: ".github/workflows/reusable-*.yml"
+      instructions: |
+        Reusable workflows consumed by the 5 klodr/* downstream repos.
+        Verify:
+        - All third-party actions pinned by full commit SHA (not tag).
+        - `permissions:` block at job level is least-privilege; never the
+          repo-wide default permissive token.
+        - Inputs that flow into shell commands are quoted to avoid
+          injection (especially user-supplied strings).
+        - Breaking input changes (rename, removal, default change) flagged
+          loudly — they break every caller silently.
+        - Output names stable for the same reason.
+    - path: ".github/actions/*/action.yml"
+      instructions: |
+        Composite actions consumed by the 5 klodr/* downstream repos.
+        Verify the same pinning + injection + breaking-change concerns
+        as the reusable workflows. Composite step `run:` blocks must
+        always set `shell: bash` (or sh) explicitly.
+    - path: "profile/README.md"
+      instructions: |
+        Public org/profile README rendered on https://github.com/klodr.
+        Treat any change as user-facing copy: tone, accuracy, link
+        validity all matter. Do not propose tracker/badge additions
+        without explicit owner request.
+    - path: "{CONTRIBUTING,SECURITY,CODE_OF_CONDUCT,SUPPORT}.md"
+      instructions: |
+        Default community health files propagated by GitHub to any
+        klodr/* repo that does not carry its own version. Treat changes
+        as cross-repo policy edits, not single-repo cleanups. Flag
+        anything that would conflict with an existing per-repo override.
+
+chat:
+  auto_reply: true
+  art: false
