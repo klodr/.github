@@ -1,0 +1,50 @@
+name: CI
+
+# Minimal CI for the klodr/.github meta-repo:
+# - actionlint:  YAML/expression validation of every workflow + composite
+#                action shipped from this repo (a broken reusable workflow
+#                cascades to every klodr/* downstream consumer, so static
+#                validation here is high-leverage).
+# - gitleaks:    secret scan via the same reusable workflow shipped from
+#                this repo — dogfooding the dependency we expose to the
+#                rest of the org.
+#
+# No status checks are wired into the `main` ruleset yet; that needs to
+# happen in the GitHub UI after the workflow has run green at least once
+# so the contexts exist on the branch.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  actionlint:
+    name: Workflow lint (actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: actionlint
+        uses: reviewdog/action-actionlint@be0761e4c1bab7cfdfca56cd03d4bb6253e39a4a # v1.72.0
+        with:
+          # Plain `github-pr-check` mode would post review comments via
+          # reviewdog; we just want a hard pass/fail status check here.
+          reporter: github-check
+          fail_level: error
+
+  gitleaks:
+    name: Gitleaks
+    # Same-repo reusable workflow — explicit local reference per
+    # GitHub docs: `uses: ./.github/workflows/<file>` (no @ref).
+    uses: ./.github/workflows/reusable-gitleaks.yml
