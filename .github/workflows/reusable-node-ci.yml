@@ -1,0 +1,103 @@
+# Reusable Node/TypeScript CI workflow for klodr/* repos.
+#
+# Consumed by repos like:
+#   jobs:
+#     ci:
+#       uses: klodr/.github/.github/workflows/reusable-node-ci.yml@<sha>
+#       with:
+#         node-version: '20'
+#         package-manager: 'npm'
+#
+# Pin to a commit SHA (not @main) in production callers.
+
+name: Reusable / Node CI
+
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: '20'
+        description: 'Node.js version to use'
+      package-manager:
+        type: string
+        default: 'npm'
+        description: 'Package manager: npm, pnpm, or yarn'
+      run-lint:
+        type: boolean
+        default: true
+        description: 'Run `<pm> run lint`'
+      run-test:
+        type: boolean
+        default: true
+        description: 'Run `<pm> run test`'
+      run-typecheck:
+        type: boolean
+        default: false
+        description: 'Run `<pm> run typecheck`'
+      run-build:
+        type: boolean
+        default: false
+        description: 'Run `<pm> run build`'
+      working-directory:
+        type: string
+        default: '.'
+        description: 'Working directory for the commands'
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: Lint, typecheck, test
+    runs-on: ubuntu-latest
+    env:
+      HUSKY: '0'
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        if: inputs.package-manager == 'pnpm'
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: ${{ inputs.package-manager }}
+          cache-dependency-path: ${{ inputs.working-directory }}/${{
+            inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' ||
+            inputs.package-manager == 'yarn' && 'yarn.lock' ||
+            'package-lock.json' }}
+
+      - name: Install dependencies
+        run: |
+          case "${{ inputs.package-manager }}" in
+            pnpm) pnpm install --frozen-lockfile ;;
+            yarn) yarn install --frozen-lockfile ;;
+            npm)  npm ci ;;
+            *)
+              echo "Unknown package manager: ${{ inputs.package-manager }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Lint
+        if: inputs.run-lint
+        run: ${{ inputs.package-manager }} run lint
+
+      - name: Typecheck
+        if: inputs.run-typecheck
+        run: ${{ inputs.package-manager }} run typecheck
+
+      - name: Test
+        if: inputs.run-test
+        run: ${{ inputs.package-manager }} run test
+
+      - name: Build
+        if: inputs.run-build
+        run: ${{ inputs.package-manager }} run build

@@ -1,0 +1,69 @@
+# Reusable workflow that auto-arms `--merge --auto` (squash) on a PR
+# opened by the release-please GitHub App. Consumed by callers like:
+#
+#   on:
+#     pull_request:
+#       types: [opened]
+#
+#   jobs:
+#     call:
+#       uses: klodr/.github/.github/workflows/reusable-auto-merge-release-please.yml@<sha>
+#       secrets:
+#         RELEASE_PLEASE_CLIENT_ID: ${{ secrets.RELEASE_PLEASE_CLIENT_ID }}
+#         RELEASE_PLEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+#
+# Pin to a commit SHA (not @main) in production callers.
+#
+# Why this exists: release-please opens a perpetually-updated release
+# PR. Once required CI checks go green there is no remaining human
+# decision — the PR is mechanically generated from already-merged
+# Conventional Commits. Arming --auto --squash on the `opened` event
+# means the PR self-merges as soon as branch protections are satisfied
+# and we get release artifacts without an extra manual click.
+#
+# We mint an App installation token (instead of using GITHUB_TOKEN) so
+# the merge fires the downstream `release.yml` workflow — GitHub
+# suppresses workflow chains initiated by GITHUB_TOKEN but treats App
+# tokens as human-equivalent.
+
+name: Reusable / Auto-merge release-please PR
+
+on:
+  workflow_call:
+    secrets:
+      RELEASE_PLEASE_CLIENT_ID:
+        required: true
+        description: 'Client ID of the release-please GitHub App'
+      RELEASE_PLEASE_APP_PRIVATE_KEY:
+        required: true
+        description: 'PEM private key of the release-please GitHub App'
+
+permissions:
+  contents: read
+
+jobs:
+  auto-merge:
+    name: Auto-merge release-please PR
+    # Filter: only PRs opened by the release-please-app[bot]. The PR
+    # author is set when the App pushes the branch with its installation
+    # token. Any other PR (human, dependabot, etc.) is a no-op.
+    if: github.event.pull_request.user.login == 'release-please-app[bot]'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - name: Mint App token
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.RELEASE_PLEASE_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - name: Arm auto-merge
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh pr merge ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --squash --auto --delete-branch
