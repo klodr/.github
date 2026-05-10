@@ -1,0 +1,42 @@
+name: Upload test results to Codecov (Test Analytics)
+description: >
+  Upload a JUnit XML report to Codecov Test Analytics via OIDC, used to
+  populate the flaky-test dashboard. Caller is expected to wrap this in
+  an `if: always() && !cancelled()` so failed test runs still upload
+  their report — that's exactly when the dashboard is most useful.
+
+  Caller MUST grant `id-token: write` on the consuming job — OIDC is
+  what removes the need for a long-lived `CODECOV_TOKEN` secret and
+  what unblocks Dependabot PRs (their restricted secret context cannot
+  read repository secrets).
+
+inputs:
+  slug:
+    description: Codecov slug (owner/repo). Defaults to the consuming repo.
+    required: false
+    default: ${{ github.repository }}
+  files:
+    description: Comma-separated list of JUnit XML files to upload.
+    required: false
+    default: ./test-results.junit.xml
+  fail-on-error:
+    description: Fail the CI run if the Codecov upload errors.
+    required: false
+    default: "true"
+  disable-search:
+    description: Disable codecov-action's multi-language file probe.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Upload test results to Codecov (Test Analytics)
+      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+      with:
+        report_type: test_results
+        files: ${{ inputs.files }}
+        fail_ci_if_error: ${{ inputs.fail-on-error }}
+        slug: ${{ inputs.slug }}
+        use_oidc: true
+        disable_search: ${{ inputs.disable-search }}

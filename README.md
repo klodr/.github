@@ -22,6 +22,38 @@ Meta-repository for the `klodr/*` projects on GitHub. Hosts:
 
   Pin to a commit SHA, not `@main`, for reproducible builds.
 
+- **Composite actions** — under `.github/actions/<name>/action.yml`,
+  consumed by each MCP's CI via
+  `uses: klodr/.github/.github/actions/<name>@<sha>`. Used when the
+  caller needs to keep its own job names (e.g. status-check names that
+  branch protection rules pin) but still wants to factor out repeated
+  steps. Composite-action steps run inline in the caller job, so the
+  caller — not the composite — owns the job display name.
+
+  Available composite actions:
+  - `setup-node-mcp` — checkout + `actions/setup-node` (cache enabled)
+    + install dependencies via npm/pnpm/yarn. Inputs: `node-version`
+    (default `"22"`), `package-manager` (default `npm`).
+  - `lint-format` — `<pm> run lint` + (optional) `<pm> run format:check`.
+    Inputs: `package-manager` (default `npm`), `run-format-check`
+    (default `"true"`).
+  - `codecov-upload` — pre-trust the Codecov GPG signing key, then
+    upload coverage via `codecov-action` with OIDC. Inputs: `slug`
+    (default `${{ github.repository }}`), `files` (default
+    `./coverage/lcov.info,./coverage/coverage-final.json`),
+    `fail-on-error` (default `"true"`), `disable-search` (default
+    `"true"`). Caller must grant `id-token: write` on the consuming
+    job for OIDC.
+  - `codecov-test-analytics` — upload a JUnit XML report to Codecov
+    Test Analytics via OIDC. Inputs: `slug`
+    (default `${{ github.repository }}`), `files` (default
+    `./test-results.junit.xml`), `fail-on-error` (default `"true"`),
+    `disable-search` (default `"true"`). Caller is expected to wrap
+    this in `if: always() && !cancelled()` so failed test runs still
+    upload their report.
+
+  Pin to a commit SHA, not `@main`, for reproducible builds.
+
 ## Why this exists
 
 The four MCP repos (`gmail-mcp`, `mercury-invoicing-mcp`, `faxdrop-mcp`,

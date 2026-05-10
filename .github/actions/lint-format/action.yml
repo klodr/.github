@@ -1,0 +1,28 @@
+name: Lint and format check
+description: >
+  Run the calling repo's `lint` script and (optionally) its
+  `format:check` script via the chosen package manager. Pulled out of
+  the MCP CI lint job so a future tooling switch (e.g. ESLint flat
+  config rollout, Prettier replacement) lands in a single PR here.
+
+inputs:
+  package-manager:
+    description: Package manager to invoke the scripts (npm | pnpm | yarn).
+    required: false
+    default: npm
+  run-format-check:
+    description: Run the `format:check` script after lint (set to "false" to skip).
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: ESLint
+      shell: bash
+      run: ${{ inputs.package-manager }} run lint
+
+    - name: Prettier (check)
+      if: inputs.run-format-check == 'true'
+      shell: bash
+      run: ${{ inputs.package-manager }} run format:check

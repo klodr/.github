@@ -1,0 +1,59 @@
+name: Upload coverage to Codecov
+description: >
+  Upload a coverage report to Codecov via OIDC, after pre-trusting the
+  Codecov GPG signing key so the upload's `gpg --verify` stops emitting
+  a misleading "key is not certified" warning. Designed for the klodr/*
+  MCP repos which dual-emit lcov.info + coverage-final.json (lcov for
+  the basic check, v8 JSON for accurate indirect-changes detection).
+
+  Caller MUST grant `id-token: write` on the consuming job — OIDC is
+  what removes the need for a long-lived `CODECOV_TOKEN` secret and
+  what unblocks Dependabot PRs (their restricted secret context cannot
+  read repository secrets).
+
+inputs:
+  slug:
+    description: Codecov slug (owner/repo). Defaults to the consuming repo.
+    required: false
+    default: ${{ github.repository }}
+  files:
+    description: Comma-separated list of coverage files to upload.
+    required: false
+    default: ./coverage/lcov.info,./coverage/coverage-final.json
+  fail-on-error:
+    description: Fail the CI run if the Codecov upload errors.
+    required: false
+    default: "true"
+  disable-search:
+    description: Disable codecov-action's multi-language file probe.
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    # Pre-mark the Codecov signing key as ultimate-trust so the
+    # subsequent `gpg --verify` inside codecov-action stops emitting
+    # "WARNING: This key is not certified with a trusted signature!".
+    # Cosmetic but misleading on a supply-chain audit log.
+    - name: Pre-trust Codecov GPG signing key
+      shell: bash
+      run: echo "27034E7FDB850E0BBC2C62FF806BB28AED779869:6:" | gpg --import-ownertrust
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
+      with:
+        fail_ci_if_error: ${{ inputs.fail-on-error }}
+        slug: ${{ inputs.slug }}
+        # OIDC-based upload — works in Dependabot PR context too,
+        # where `secrets.CODECOV_TOKEN` is unavailable. Tokens are
+        # still scoped per-upload; OIDC just removes the long-lived
+        # secret from the round-trip.
+        use_oidc: true
+        # Upload BOTH the lcov rollup AND the v8-native JSON report.
+        # The lcov upload satisfies the basic coverage check; the
+        # JSON carries branch-level detail codecov uses to compute
+        # accurate indirect-changes (without it, codecov reports
+        # phantom regressions on files the PR doesn't touch).
+        files: ${{ inputs.files }}
+        disable_search: ${{ inputs.disable-search }}
