@@ -9,10 +9,18 @@ Meta-repository for the `klodr/*` projects on GitHub. Hosts:
   carry its own version of the same file.
   See [the GitHub docs](https://docs.github.com/en/communities/setting-up-your-project-for-healthy-contributions/creating-a-default-community-health-file)
   for the propagation rules.
-- **Reusable workflows** *(planned)* — under `.github/workflows/reusable-*.yml`,
+- **Reusable workflows** — under `.github/workflows/reusable-*.yml`,
   consumed by each MCP's CI via `uses: klodr/.github/.github/workflows/reusable-<name>.yml@<sha>`.
   Goal: single source of truth for CI / release / security pipelines so
   a workflow change is one PR here rather than four parallel PRs.
+
+  Available reusable workflows:
+  - `reusable-node-ci.yml` — lint + typecheck + test for Node/TS repos
+    (npm/pnpm/yarn, configurable steps, working-directory)
+  - `reusable-gitleaks.yml` — gitleaks secret scanning
+    (optional `GITLEAKS_LICENSE` secret for Pro features)
+
+  Pin to a commit SHA, not `@main`, for reproducible builds.
 
 ## Why this exists
 

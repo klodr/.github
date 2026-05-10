@@ -1,0 +1,51 @@
+# Reusable gitleaks workflow for klodr/* repos.
+#
+# Consumed by repos like:
+#   jobs:
+#     secrets:
+#       uses: klodr/.github/.github/workflows/reusable-gitleaks.yml@<sha>
+#     # or with a custom config:
+#     #   with:
+#     #     config-path: .gitleaks.toml
+#     #   secrets:
+#     #     GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+#
+# Pin to a commit SHA (not @main) in production callers.
+
+name: Reusable / Gitleaks
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        type: string
+        default: ''
+        description: 'Path to a custom gitleaks config (empty = use repo default or built-in)'
+      fetch-depth:
+        type: number
+        default: 0
+        description: 'Git fetch depth (0 = full history, required for full scan)'
+    secrets:
+      GITLEAKS_LICENSE:
+        required: false
+        description: 'Optional gitleaks Pro license key'
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Gitleaks scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: ${{ inputs.fetch-depth }}
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+          GITLEAKS_CONFIG: ${{ inputs.config-path }}
