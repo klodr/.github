@@ -26,8 +26,25 @@ on:
         description: 'Path to markdownlint-cli2 config file (relative to repo root).'
       markdownlint-globs:
         type: string
-        default: '**/*.md'
-        description: 'Glob pattern of Markdown files to lint (passed to markdownlint-cli2).'
+        # `markdownlint-cli2-action` splits this input by NEWLINE (not by
+        # space). The `#prefix` patterns are exclusions. The `.markdownlint`
+        # config's `ignores` array is only honored when markdownlint-cli2
+        # is invoked WITHOUT explicit globs, so we re-list common exclusions
+        # here to make the default safe for callers that don't override.
+        #
+        # ⚠️ BEHAVIOUR CHANGE (PR #14): default was previously `'**/*.md'`
+        # (single line, no exclusions). Callers that relied on the old
+        # default linting CHANGELOG.md / node_modules / coverage / dist
+        # should explicitly override with `markdownlint-globs: '**/*.md'`
+        # to restore prior behaviour. The 5 klodr/* MCP+plugin callers
+        # were updated to use the new default in the same release window.
+        default: |
+          **/*.md
+          #CHANGELOG.md
+          #node_modules
+          #coverage
+          #dist
+        description: 'Newline-separated glob patterns for markdownlint-cli2. `#prefix` excludes.'
       yamllint-paths:
         type: string
         default: '.'
