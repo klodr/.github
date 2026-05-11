@@ -1,0 +1,157 @@
+name: Reusable Release Please
+
+# Centralised release-please runner for klodr/* repos. See per-repo
+# release-please.yml callers for the `on: workflow_run` trigger that
+# fires this — the trigger MUST stay at the caller because GitHub
+# Actions does not allow `on:` to read workflow inputs.
+#
+# What this reusable does:
+# 1. Cross-workflow gate: when fired by `workflow_run`, polls the runs
+#    of the head SHA and asserts every workflow listed in
+#    `inputs.upstream-workflows` is `success` before proceeding. Without
+#    this, the FIRST upstream to succeed would fire release-please
+#    while the others were still `in_progress`, and the tag-creation
+#    call would race the `tags` ruleset's required-status-checks.
+# 2. Mints a short-lived installation token from the
+#    klodr-release-please GitHub App. Pushing the release PR + the
+#    release tag with that token (instead of GITHUB_TOKEN) makes the
+#    downstream `release.yml` workflow_dispatch chain fire — GitHub
+#    blocks workflow-triggered workflows when the originating actor is
+#    the runner's GITHUB_TOKEN, but treats App-installation tokens as
+#    human-equivalent.
+# 3. Runs googleapis/release-please-action with the App token.
+#
+# Caller pattern (~15 lines):
+#
+#   name: release-please
+#   on:
+#     workflow_run:
+#       workflows: ["CI", "CodeQL Advanced", "Docker build"]  # adapt per repo
+#       types: [completed]
+#       branches: [main]
+#     workflow_dispatch: {}
+#   permissions:
+#     contents: read
+#   jobs:
+#     release-please:
+#       uses: klodr/.github/.github/workflows/reusable-release-please.yml@<reachable-sha>
+#       with:
+#         upstream-workflows: '["CI", "CodeQL Advanced", "Docker build"]'  # JSON array, MUST match `on: workflow_run: workflows`
+#       secrets:
+#         release-please-client-id:     ${{ secrets.RELEASE_PLEASE_CLIENT_ID }}
+#         release-please-private-key:   ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+on:
+  workflow_call:
+    inputs:
+      upstream-workflows:
+        description: >-
+          JSON array (as a string) of workflow names whose success on the
+          head SHA is required before release-please runs. MUST match the
+          caller's `on: workflow_run: workflows:` list, otherwise the gate
+          will deadlock on workflows that never appear in the run history.
+        type: string
+        required: true
+      config-file:
+        description: "Path to release-please-config.json at the repo root."
+        type: string
+        default: "release-please-config.json"
+      manifest-file:
+        description: "Path to .release-please-manifest.json at the repo root."
+        type: string
+        default: ".release-please-manifest.json"
+    secrets:
+      release-please-client-id:
+        description: "GitHub App client ID for the klodr-release-please app installation."
+        required: true
+      release-please-private-key:
+        description: "GitHub App private key (PEM) for the klodr-release-please app installation."
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    # Skip immediately if the upstream workflow that triggered THIS run
+    # didn't succeed. The full multi-workflow gate is below; this is just
+    # a fast-fail to avoid spinning up the runner for an obviously-bad
+    # state. `workflow_dispatch` invocations always pass through.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    permissions:
+      actions: read         # the gate step below reads workflow-runs of OTHER workflows on this SHA
+      contents: write
+      pull-requests: write
+    steps:
+      # `on: workflow_run` with multiple workflows fires the downstream
+      # job once per upstream workflow completion. The job-level `if:`
+      # above only validates the conclusion of THE triggering upstream
+      # — not all of them. Without an explicit cross-workflow gate, the
+      # FIRST upstream to succeed would fire release-please before the
+      # others reach `success`, and the tag-creation call would still
+      # race the ruleset.
+      #
+      # This step polls the workflow-runs for the head SHA and asserts
+      # every required upstream is `success` before letting release-
+      # please run. The runs of the OTHER upstreams may still be
+      # `in_progress` at the moment we are triggered — the gate output
+      # will be `false` and release-please is skipped. Once the LAST
+      # upstream completes and triggers us, all required workflows are
+      # `success` and the gate passes.
+      - name: Gate until all required upstream workflows succeeded for this SHA
+        id: checks-gate
+        if: github.event_name == 'workflow_run'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          UPSTREAM_WORKFLOWS: ${{ inputs.upstream-workflows }}
+        with:
+          script: |
+            const required = JSON.parse(process.env.UPSTREAM_WORKFLOWS);
+            const sha = context.payload.workflow_run.head_sha;
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRunsForRepo,
+              { owner: context.repo.owner, repo: context.repo.repo, head_sha: sha, per_page: 100 },
+            );
+            const ok = required.every((name) =>
+              runs.some((r) => r.name === name && r.conclusion === "success"),
+            );
+            core.info(`SHA ${sha}: required=${JSON.stringify(required)} all-success=${ok}`);
+            core.setOutput("ready", ok ? "true" : "false");
+
+      # Mint a short-lived GitHub App installation token. Pushing the
+      # release PR + the release tag with this token (instead of the
+      # default GITHUB_TOKEN) makes the downstream `release.yml` workflow
+      # fire automatically — GitHub blocks workflow-triggered workflows
+      # when the originating actor is the runner's GITHUB_TOKEN, but
+      # treats App-installation tokens as human-equivalent.
+      - name: Mint release-please App token
+        id: app-token
+        if: github.event_name == 'workflow_dispatch' || steps.checks-gate.outputs.ready == 'true'
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.release-please-client-id }}
+          private-key: ${{ secrets.release-please-private-key }}
+          # Scope the minted token to the strict set release-please needs
+          # (per googleapis/release-please-action docs). Without these,
+          # the token inherits every permission granted to the app
+          # installation — too broad for a workflow whose only job is
+          # opening release PRs and tagging releases.
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: release-please
+        if: github.event_name == 'workflow_dispatch' || steps.checks-gate.outputs.ready == 'true'
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          # The action reads the config + manifest at the repo root
+          # automatically when these flags are set.
+          config-file: ${{ inputs.config-file }}
+          manifest-file: ${{ inputs.manifest-file }}
