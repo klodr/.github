@@ -43,12 +43,12 @@ template and label it `question`.
 
 ## ⏱️ Response expectations
 
-| Severity | Target |
-|---|---|
+| Severity                       | Target                   |
+| ------------------------------ | ------------------------ |
 | Security issue acknowledgement | 48 h (per `SECURITY.md`) |
-| Critical CVE patch released | 7 days |
-| Bug blocking normal usage | 48 h |
-| Other issue / PR | 7 days |
+| Critical CVE patch released    | 7 days                   |
+| Bug blocking normal usage      | 48 h                     |
+| Other issue / PR               | 7 days                   |
 
 Best-effort SLOs from a solo maintainer doing open-source on the side.
 Sponsoring (see [`FUNDING.yml`](FUNDING.yml)) helps keep the lights on.

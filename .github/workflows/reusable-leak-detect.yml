@@ -20,12 +20,12 @@ on:
     inputs:
       patterns-ref:
         type: string
-        default: 'main'
-        description: 'Branch / tag / SHA of klodr/.github_private to use.'
+        default: "main"
+        description: "Branch / tag / SHA of klodr/.github_private to use."
     secrets:
       leak-detect-pat:
         required: true
-        description: 'Fine-grained PAT, Contents:Read on klodr/.github_private only.'
+        description: "Fine-grained PAT, Contents:Read on klodr/.github_private only."
 
 jobs:
   scan:

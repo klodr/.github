@@ -1,0 +1,34 @@
+{
+  "name": "klodr-dot-github",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Org-level reusable workflows, composite actions and shared templates for klodr/* repos.",
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "markdownlint-cli2 \"**/*.md\" \"#node_modules\"",
+    "lint:md": "markdownlint-cli2 \"**/*.md\" \"#node_modules\"",
+    "prepare": "husky || true"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.0.0",
+    "@commitlint/config-conventional": "^21.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.4",
+    "markdownlint-cli2": "^0.22.1",
+    "prettier": "^3.3.3"
+  },
+  "lint-staged": {
+    "*.{yml,yaml}": [
+      "prettier --write",
+      "yamllint"
+    ],
+    "*.md": [
+      "prettier --write",
+      "markdownlint-cli2"
+    ],
+    "*.{json,jsonc,json5}": [
+      "prettier --write"
+    ]
+  }
+}

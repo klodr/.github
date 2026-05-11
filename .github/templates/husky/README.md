@@ -1,6 +1,6 @@
-# Husky template — klodr/* shared hooks
+# Husky template — klodr/\* shared hooks
 
-Source of truth for the husky hooks shipped across all klodr/* repos.
+Source of truth for the husky hooks shipped across all klodr/\* repos.
 
 ## Files
 
