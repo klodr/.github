@@ -118,16 +118,31 @@ jobs:
       - name: Gate until all required upstream workflows succeeded for this SHA
         id: checks-gate
         if: github.event_name == 'workflow_run'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         env:
           UPSTREAM_WORKFLOWS: ${{ inputs.upstream-workflows }}
         with:
           script: |
             const required = JSON.parse(process.env.UPSTREAM_WORKFLOWS);
             const sha = context.payload.workflow_run.head_sha;
+            // Constrain the lookup to runs that originated from the same
+            // branch AND the same event type as the triggering upstream.
+            // Without these filters, a `workflow_dispatch` rerun (or a
+            // run from another branch sharing the same head SHA) could
+            // sneak in and either satisfy or break the gate against an
+            // unrelated context.
+            const branch = context.payload.workflow_run.head_branch;
+            const event = context.payload.workflow_run.event;
             const runs = await github.paginate(
               github.rest.actions.listWorkflowRunsForRepo,
-              { owner: context.repo.owner, repo: context.repo.repo, head_sha: sha, per_page: 100 },
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head_sha: sha,
+                branch,
+                event,
+                per_page: 100,
+              },
             );
             // For each workflow name, keep only the LATEST run. A
             // workflow that has been re-run (manually or via the
