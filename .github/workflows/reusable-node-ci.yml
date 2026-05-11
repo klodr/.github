@@ -1,103 +1,198 @@
-# Reusable Node/TypeScript CI workflow for klodr/* repos.
+# Reusable Node CI workflow for klodr/* repos.
 #
-# Consumed by repos like:
+# Covers the full surface used today across the 5 klodr/* MCP+plugin
+# repos: lint+format job, build+test matrix job (Node 22 + 24),
+# coverage upload via codecov OIDC, and best-effort codecov test
+# analytics. Every step is opt-out via inputs — DEFAULTS reflect the
+# current klodr/* MCP TS profile (build+test+coverage). Override only
+# what differs (e.g. `enable-build-step: false` for a JS-only plugin).
+#
+# Consumed via:
 #   jobs:
 #     ci:
 #       uses: klodr/.github/.github/workflows/reusable-node-ci.yml@<sha>
+#       permissions:
+#         contents: read
+#         id-token: write   # required if enable-codecov-upload (default)
 #       with:
-#         node-version: '20'
-#         package-manager: 'npm'
+#         codecov-slug: klodr/<repo>
 #
-# Pin to a commit SHA (not @main) in production callers.
+# Pin to a commit SHA, not @main, in production callers.
 
 name: Reusable / Node CI
 
 on:
   workflow_call:
     inputs:
-      node-version:
-        type: string
-        default: '20'
-        description: 'Node.js version to use'
-      package-manager:
+      # ---- Lint & Format job ----
+      enable-lint-job:
+        type: boolean
+        default: true
+        description: 'Run the Lint & Format job.'
+      lint-package-manager:
         type: string
         default: 'npm'
-        description: 'Package manager: npm, pnpm, or yarn'
-      run-lint:
+        description: 'Package manager passed to setup-node-mcp + lint-format.'
+      run-format-check:
         type: boolean
         default: true
-        description: 'Run `<pm> run lint`'
-      run-test:
+        description: 'Whether lint-format runs prettier --check (false for repos without prettier).'
+      lint-node-version:
+        type: string
+        default: '22'
+        description: 'Node version used for the lint job.'
+
+      # ---- Build & Test job ----
+      enable-build-test-job:
         type: boolean
         default: true
-        description: 'Run `<pm> run test`'
-      run-typecheck:
+        description: 'Run the Build & Test matrix job.'
+      build-test-job-name:
+        type: string
+        default: 'Build & Test'
+        description: 'Job display name (must match ruleset required-status-checks).'
+      node-versions:
+        type: string
+        default: '["22", "24"]'
+        description: 'JSON array of Node versions (matrix). Example: ''["22"]'' or ''["22","24"]''.'
+      enable-build-step:
         type: boolean
-        default: false
-        description: 'Run `<pm> run typecheck`'
-      run-build:
+        default: true
+        description: 'Run `npm run build` before tests (false for plugins with no build step).'
+      coverage-node-version:
+        type: string
+        default: '22'
+        description: 'Node version on which coverage runs. Other versions run plain `npm test`.'
+      coverage-strategy:
+        type: string
+        default: 'node-version-only'
+        description: |
+          'node-version-only' (default): coverage only on coverage-node-version, plain test on others.
+          'always': run `npm run test:coverage` on every matrix entry (no plain `npm test`).
+
+      # ---- Coverage upload ----
+      enable-codecov-upload:
         type: boolean
-        default: false
-        description: 'Run `<pm> run build`'
+        default: true
+        description: 'Upload coverage to codecov via OIDC after tests on coverage-node-version.'
+      codecov-slug:
+        type: string
+        default: ''
+        description: 'Codecov slug (e.g. klodr/gmail-mcp). Required if enable-codecov-upload is true.'
+
+      # ---- Codecov Test Analytics (JUnit) ----
+      enable-codecov-test-analytics:
+        type: boolean
+        default: true
+        description: 'Upload JUnit results to codecov test analytics. Best-effort: never blocks merge.'
+      test-analytics-junit-file:
+        type: string
+        default: './test-results.junit.xml'
+        description: 'Path to JUnit XML produced by the test runner.'
+      test-analytics-fail-on-error:
+        type: string
+        default: 'false'
+        description: 'Pass-through to codecov-test-analytics fail-on-error input.'
+
+      # ---- Composite actions pin ----
+      composite-actions-ref:
+        type: string
+        default: ''
+        description: |
+          SHA / ref of klodr/.github to use for the composite actions
+          (setup-node-mcp, lint-format, codecov-upload, codecov-test-analytics).
+          Defaults to the same SHA as this reusable workflow when empty.
+          Override to a newer SHA only if a composite action changed
+          and you want to pick it up before bumping the reusable ref.
+
       working-directory:
         type: string
         default: '.'
-        description: 'Working directory for the commands'
+        description: 'Working directory for run steps.'
 
 permissions:
   contents: read
 
 jobs:
-  ci:
-    name: Lint, typecheck, test
+  lint:
+    name: Lint & Format
+    if: inputs.enable-lint-job
     runs-on: ubuntu-latest
-    env:
-      HUSKY: '0'
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Setup pnpm
-        if: inputs.package-manager == 'pnpm'
-        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4.x
-
-      - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+      # The composite-actions-ref input lets a caller decouple
+      # composite-action SHAs from the reusable workflow SHA. Empty =
+      # use the same SHA the workflow itself was called at, computed
+      # via github.workflow_sha.
+      - name: Setup Node (lint job)
+        uses: klodr/.github/.github/actions/setup-node-mcp@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
         with:
-          node-version: ${{ inputs.node-version }}
-          cache: ${{ inputs.package-manager }}
-          cache-dependency-path: ${{ inputs.working-directory }}/${{
-            inputs.package-manager == 'pnpm' && 'pnpm-lock.yaml' ||
-            inputs.package-manager == 'yarn' && 'yarn.lock' ||
-            'package-lock.json' }}
+          node-version: ${{ inputs.lint-node-version }}
+          package-manager: ${{ inputs.lint-package-manager }}
 
-      - name: Install dependencies
-        run: |
-          case "${{ inputs.package-manager }}" in
-            pnpm) pnpm install --frozen-lockfile ;;
-            yarn) yarn install --frozen-lockfile ;;
-            npm)  npm ci ;;
-            *)
-              echo "Unknown package manager: ${{ inputs.package-manager }}" >&2
-              exit 1
-              ;;
-          esac
+      - name: Lint & format
+        uses: klodr/.github/.github/actions/lint-format@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
+        with:
+          package-manager: ${{ inputs.lint-package-manager }}
+          run-format-check: ${{ inputs.run-format-check && 'true' || 'false' }}
 
-      - name: Lint
-        if: inputs.run-lint
-        run: ${{ inputs.package-manager }} run lint
-
-      - name: Typecheck
-        if: inputs.run-typecheck
-        run: ${{ inputs.package-manager }} run typecheck
-
-      - name: Test
-        if: inputs.run-test
-        run: ${{ inputs.package-manager }} run test
+  build-test:
+    name: ${{ inputs.build-test-job-name }} (Node ${{ matrix.node }})
+    if: inputs.enable-build-test-job
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # codecov OIDC upload
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ${{ fromJSON(inputs.node-versions) }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Setup Node ${{ matrix.node }}
+        uses: klodr/.github/.github/actions/setup-node-mcp@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager: ${{ inputs.lint-package-manager }}
 
       - name: Build
-        if: inputs.run-build
-        run: ${{ inputs.package-manager }} run build
+        if: inputs.enable-build-step
+        run: ${{ inputs.lint-package-manager }} run build
+
+      # Test routing:
+      # - coverage-strategy='always'              -> always test:coverage
+      # - coverage-strategy='node-version-only'   -> coverage on coverage-node-version, plain test elsewhere
+      - name: Test (with coverage)
+        if: ${{ inputs.coverage-strategy == 'always' || matrix.node == inputs.coverage-node-version }}
+        run: ${{ inputs.lint-package-manager }} run test:coverage
+
+      - name: Test (no coverage)
+        if: ${{ inputs.coverage-strategy != 'always' && matrix.node != inputs.coverage-node-version }}
+        run: ${{ inputs.lint-package-manager }} test
+
+      - name: Upload coverage
+        if: ${{ inputs.enable-codecov-upload && matrix.node == inputs.coverage-node-version }}
+        uses: klodr/.github/.github/actions/codecov-upload@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
+        with:
+          slug: ${{ inputs.codecov-slug }}
+
+      # Test Analytics — best-effort:
+      # - `always() && !cancelled()` so failed test runs still upload
+      #   (the flaky-test dashboard is most useful exactly then)
+      # - `continue-on-error: true` catches wrapper / runtime failures
+      #   that bypass codecov-action's `fail_ci_if_error` input
+      # - `fail-on-error` defaults to `'false'` for the same reason
+      - name: Upload test analytics
+        if: ${{ always() && inputs.enable-codecov-test-analytics && matrix.node == inputs.coverage-node-version && !cancelled() }}
+        continue-on-error: true
+        uses: klodr/.github/.github/actions/codecov-test-analytics@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
+        with:
+          slug: ${{ inputs.codecov-slug }}
+          files: ${{ inputs.test-analytics-junit-file }}
+          fail-on-error: ${{ inputs.test-analytics-fail-on-error }}
