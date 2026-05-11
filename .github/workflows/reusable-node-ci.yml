@@ -29,10 +29,10 @@ on:
         type: boolean
         default: true
         description: 'Run the Lint & Format job.'
-      lint-package-manager:
+      package-manager:
         type: string
         default: 'npm'
-        description: 'Package manager passed to setup-node-mcp + lint-format.'
+        description: 'Package manager for all jobs (npm, yarn, pnpm).'
       run-format-check:
         type: boolean
         default: true
@@ -94,17 +94,6 @@ on:
         default: 'false'
         description: 'Pass-through to codecov-test-analytics fail-on-error input.'
 
-      # ---- Composite actions pin ----
-      composite-actions-ref:
-        type: string
-        default: ''
-        description: |
-          SHA / ref of klodr/.github to use for the composite actions
-          (setup-node-mcp, lint-format, codecov-upload, codecov-test-analytics).
-          Defaults to the same SHA as this reusable workflow when empty.
-          Override to a newer SHA only if a composite action changed
-          and you want to pick it up before bumping the reusable ref.
-
       working-directory:
         type: string
         default: '.'
@@ -124,20 +113,16 @@ jobs:
       run:
         working-directory: ${{ inputs.working-directory }}
     steps:
-      # The composite-actions-ref input lets a caller decouple
-      # composite-action SHAs from the reusable workflow SHA. Empty =
-      # use the same SHA the workflow itself was called at, computed
-      # via github.workflow_sha.
       - name: Setup Node (lint job)
         uses: klodr/.github/.github/actions/setup-node-mcp@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
         with:
           node-version: ${{ inputs.lint-node-version }}
-          package-manager: ${{ inputs.lint-package-manager }}
+          package-manager: ${{ inputs.package-manager }}
 
       - name: Lint & format
         uses: klodr/.github/.github/actions/lint-format@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
         with:
-          package-manager: ${{ inputs.lint-package-manager }}
+          package-manager: ${{ inputs.package-manager }}
           run-format-check: ${{ inputs.run-format-check && 'true' || 'false' }}
 
   build-test:
@@ -159,22 +144,28 @@ jobs:
         uses: klodr/.github/.github/actions/setup-node-mcp@cfc709297722fd29bb9e66a3d0f13529ba4d6295 # main @ 2026-05-10
         with:
           node-version: ${{ matrix.node }}
-          package-manager: ${{ inputs.lint-package-manager }}
+          package-manager: ${{ inputs.package-manager }}
 
       - name: Build
         if: inputs.enable-build-step
-        run: ${{ inputs.lint-package-manager }} run build
+        env:
+          PM: ${{ inputs.package-manager }}
+        run: '"$PM" run build'
 
       # Test routing:
       # - coverage-strategy='always'              -> always test:coverage
-      # - coverage-strategy='node-version-only'   -> coverage on coverage-node-version, plain test elsewhere
+      # - coverage-strategy='node-version-only'   -> coverage on coverage-node-version, plain `<pm> run test` elsewhere
       - name: Test (with coverage)
         if: ${{ inputs.coverage-strategy == 'always' || matrix.node == inputs.coverage-node-version }}
-        run: ${{ inputs.lint-package-manager }} run test:coverage
+        env:
+          PM: ${{ inputs.package-manager }}
+        run: '"$PM" run test:coverage'
 
       - name: Test (no coverage)
         if: ${{ inputs.coverage-strategy != 'always' && matrix.node != inputs.coverage-node-version }}
-        run: ${{ inputs.lint-package-manager }} test
+        env:
+          PM: ${{ inputs.package-manager }}
+        run: '"$PM" run test'
 
       - name: Upload coverage
         if: ${{ inputs.enable-codecov-upload && matrix.node == inputs.coverage-node-version }}
