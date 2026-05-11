@@ -17,7 +17,9 @@ Each repo copies the file verbatim into its own `.husky/`. There is
 cross-repo diff sweep:
 
 ```sh
-# Quick drift check (run from anywhere with all 5 repos cloned)
+# Quick drift check — run from the klodr/.github repo root (the
+# template path below is repo-relative). With the 5 consumer repos
+# cloned under ~/git/.
 for r in eslint-plugin-security-mcp gmail-mcp faxdrop-mcp \
          mercury-invoicing-mcp relayfi-mcp; do
   diff -u .github/templates/husky/pre-push \
