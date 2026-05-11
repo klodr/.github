@@ -30,8 +30,15 @@ name: Reusable Release Please
 #       types: [completed]
 #       branches: [main]
 #     workflow_dispatch: {}
+#   # Caller-level `permissions:` is a CEILING for what the called
+#   # workflow can request at its job level. The gate step inside this
+#   # reusable polls `actions.listWorkflowRunsForRepo` which needs
+#   # `actions: read` on GITHUB_TOKEN; if the caller doesn't grant it,
+#   # the called workflow cannot elevate it and the API call returns
+#   # 403. Always include `actions: read` here.
 #   permissions:
 #     contents: read
+#     actions: read
 #   jobs:
 #     release-please:
 #       uses: klodr/.github/.github/workflows/reusable-release-please.yml@<reachable-sha>
@@ -85,9 +92,13 @@ jobs:
     # state. `workflow_dispatch` invocations always pass through.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     permissions:
-      actions: read         # the gate step below reads workflow-runs of OTHER workflows on this SHA
-      contents: write
-      pull-requests: write
+      # The job uses the minted App token (steps.app-token.outputs.token)
+      # for every write operation (release PR push, tag creation). The
+      # ambient GITHUB_TOKEN only needs `actions: read` for the gate
+      # step that polls workflow-runs of other workflows on this SHA;
+      # keeping it at `contents: read` shrinks the blast radius.
+      actions: read
+      contents: read
     steps:
       # `on: workflow_run` with multiple workflows fires the downstream
       # job once per upstream workflow completion. The job-level `if:`
@@ -118,9 +129,25 @@ jobs:
               github.rest.actions.listWorkflowRunsForRepo,
               { owner: context.repo.owner, repo: context.repo.repo, head_sha: sha, per_page: 100 },
             );
-            const ok = required.every((name) =>
-              runs.some((r) => r.name === name && r.conclusion === "success"),
-            );
+            // For each workflow name, keep only the LATEST run. A
+            // workflow that has been re-run (manually or via the
+            // synchronize event) has multiple entries on the same SHA;
+            // a stale `success` from an earlier run must not let the
+            // gate pass while the most recent run is still in_progress
+            // or failed.
+            const latestByName = new Map();
+            for (const run of runs) {
+              const previous = latestByName.get(run.name);
+              const runTime = new Date(run.run_started_at ?? run.created_at ?? 0);
+              const previousTime = new Date(previous?.run_started_at ?? previous?.created_at ?? 0);
+              if (!previous || runTime > previousTime) {
+                latestByName.set(run.name, run);
+              }
+            }
+            const ok = required.every((name) => {
+              const run = latestByName.get(name);
+              return run?.status === "completed" && run.conclusion === "success";
+            });
             core.info(`SHA ${sha}: required=${JSON.stringify(required)} all-success=${ok}`);
             core.setOutput("ready", ok ? "true" : "false");
 
