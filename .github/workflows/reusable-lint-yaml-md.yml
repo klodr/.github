@@ -33,14 +33,13 @@ on:
         default: '.'
         description: 'Path(s) to scan with yamllint. Defaults to repo root.'
 
-permissions:
-  contents: read
-
 jobs:
   lint:
     name: Lint YAML & Markdown
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -58,7 +57,18 @@ jobs:
         run: pip install --user 'yamllint==1.38.0'
 
       - name: Run yamllint
-        run: yamllint -c ${{ inputs.yamllint-config }} ${{ inputs.yamllint-paths }}
+        # Inputs come through env to avoid shell injection from caller-supplied
+        # paths (a caller could set yamllint-paths to `.; malicious-command`).
+        # `read -r -a` splits on whitespace into a bash array, then we expand
+        # with proper quoting so each path is a separate argv to yamllint.
+        shell: bash
+        env:
+          YAMLLINT_CONFIG: ${{ inputs.yamllint-config }}
+          YAMLLINT_PATHS: ${{ inputs.yamllint-paths }}
+        run: |
+          set -euo pipefail
+          read -r -a paths <<< "$YAMLLINT_PATHS"
+          yamllint -c "$YAMLLINT_CONFIG" "${paths[@]}"
 
       - name: Run markdownlint-cli2
         uses: DavidAnson/markdownlint-cli2-action@ded1f9488f68a970bc66ea5619e13e9b52e601cd # v23.2.0
