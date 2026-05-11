@@ -55,11 +55,14 @@ jobs:
       - name: Install yq (YAML parser)
         run: |
           set -euo pipefail
-          # yq from mikefarah, single static binary, signed releases.
-          # Pin to v4.46.1 (latest stable as of 2026-05-11).
-          sudo wget -qO /usr/local/bin/yq \
-            https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_amd64
-          sudo chmod +x /usr/local/bin/yq
+          # yq from mikefarah, pinned + checksum-verified.
+          YQ_VERSION="v4.46.1"
+          YQ_ASSET="yq_linux_amd64"
+          BASE_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}"
+          curl -fsSL -o "/tmp/${YQ_ASSET}" "${BASE_URL}/${YQ_ASSET}"
+          curl -fsSL -o /tmp/checksums "${BASE_URL}/checksums"
+          grep " ${YQ_ASSET}\$" /tmp/checksums | sha256sum -c -
+          sudo install -m 0755 "/tmp/${YQ_ASSET}" /usr/local/bin/yq
           yq --version
 
       - name: Run scanner against PR diff
