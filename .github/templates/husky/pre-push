@@ -31,7 +31,7 @@ workflow_changed=0
 #    on stdin: `<local_ref> <local_sha> <remote_ref> <remote_sha>`.
 #    Walking only HEAD would let a multi-commit push smuggle through
 #    earlier commits with a bad signature or an overlong subject.
-while read -r local_ref local_sha remote_ref remote_sha; do
+while read -r _local_ref local_sha _remote_ref remote_sha; do
   if [ "$local_sha" = "$z40" ]; then
     # Branch deletion — nothing to validate.
     continue
