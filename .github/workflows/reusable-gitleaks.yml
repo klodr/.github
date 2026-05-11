@@ -19,16 +19,16 @@ on:
     inputs:
       config-path:
         type: string
-        default: ''
-        description: 'Path to a custom gitleaks config (empty = use repo default or built-in)'
+        default: ""
+        description: "Path to a custom gitleaks config (empty = use repo default or built-in)"
       fetch-depth:
         type: number
         default: 0
-        description: 'Git fetch depth (0 = full history, required for full scan)'
+        description: "Git fetch depth (0 = full history, required for full scan)"
     secrets:
       GITLEAKS_LICENSE:
         required: false
-        description: 'Optional gitleaks Pro license key'
+        description: "Optional gitleaks Pro license key"
 
 permissions:
   contents: read

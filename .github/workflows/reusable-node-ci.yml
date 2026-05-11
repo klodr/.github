@@ -28,29 +28,29 @@ on:
       enable-lint-job:
         type: boolean
         default: true
-        description: 'Run the Lint & Format job.'
+        description: "Run the Lint & Format job."
       package-manager:
         type: string
-        default: 'npm'
-        description: 'Package manager for all jobs (npm, yarn, pnpm).'
+        default: "npm"
+        description: "Package manager for all jobs (npm, yarn, pnpm)."
       run-format-check:
         type: boolean
         default: true
-        description: 'Whether lint-format runs prettier --check (false for repos without prettier).'
+        description: "Whether lint-format runs prettier --check (false for repos without prettier)."
       lint-node-version:
         type: string
-        default: '22'
-        description: 'Node version used for the lint job.'
+        default: "22"
+        description: "Node version used for the lint job."
 
       # ---- Build & Test job ----
       enable-build-test-job:
         type: boolean
         default: true
-        description: 'Run the Build & Test matrix job.'
+        description: "Run the Build & Test matrix job."
       build-test-job-name:
         type: string
-        default: 'Build & Test'
-        description: 'Job display name (must match ruleset required-status-checks).'
+        default: "Build & Test"
+        description: "Job display name (must match ruleset required-status-checks)."
       node-versions:
         type: string
         default: '["22", "24"]'
@@ -58,14 +58,14 @@ on:
       enable-build-step:
         type: boolean
         default: true
-        description: 'Run `npm run build` before tests (false for plugins with no build step).'
+        description: "Run `npm run build` before tests (false for plugins with no build step)."
       coverage-node-version:
         type: string
-        default: '22'
-        description: 'Node version on which coverage runs. Other versions run plain `npm test`.'
+        default: "22"
+        description: "Node version on which coverage runs. Other versions run plain `npm test`."
       coverage-strategy:
         type: string
-        default: 'node-version-only'
+        default: "node-version-only"
         description: |
           'node-version-only' (default): coverage only on coverage-node-version, plain test on others.
           'always': run `npm run test:coverage` on every matrix entry (no plain `npm test`).
@@ -74,30 +74,30 @@ on:
       enable-codecov-upload:
         type: boolean
         default: true
-        description: 'Upload coverage to codecov via OIDC after tests on coverage-node-version.'
+        description: "Upload coverage to codecov via OIDC after tests on coverage-node-version."
       codecov-slug:
         type: string
-        default: ''
-        description: 'Codecov slug (e.g. klodr/gmail-mcp). Required if enable-codecov-upload is true.'
+        default: ""
+        description: "Codecov slug (e.g. klodr/gmail-mcp). Required if enable-codecov-upload is true."
 
       # ---- Codecov Test Analytics (JUnit) ----
       enable-codecov-test-analytics:
         type: boolean
         default: true
-        description: 'Upload JUnit results to codecov test analytics. Best-effort: never blocks merge.'
+        description: "Upload JUnit results to codecov test analytics. Best-effort: never blocks merge."
       test-analytics-junit-file:
         type: string
-        default: './test-results.junit.xml'
-        description: 'Path to JUnit XML produced by the test runner.'
+        default: "./test-results.junit.xml"
+        description: "Path to JUnit XML produced by the test runner."
       test-analytics-fail-on-error:
         type: string
-        default: 'false'
-        description: 'Pass-through to codecov-test-analytics fail-on-error input.'
+        default: "false"
+        description: "Pass-through to codecov-test-analytics fail-on-error input."
 
       working-directory:
         type: string
-        default: '.'
-        description: 'Working directory for run steps.'
+        default: "."
+        description: "Working directory for run steps."
 
 permissions:
   contents: read
@@ -131,7 +131,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # codecov OIDC upload
+      id-token: write # codecov OIDC upload
     strategy:
       fail-fast: false
       matrix:

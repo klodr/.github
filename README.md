@@ -7,7 +7,7 @@ Meta-repo for the `klodr/*` projects. Hosts:
 - **Reusable workflows** under `.github/workflows/reusable-*.yml`.
 - **Composite actions** under `.github/actions/*/action.yml`.
 
-Reusable workflows + composite actions are consumed by klodr/* repos via `uses: klodr/.github/.github/{workflows,actions}/<name>@<sha>`. Pin to a commit SHA, not `@main`, for reproducible builds.
+Reusable workflows + composite actions are consumed by klodr/\* repos via `uses: klodr/.github/.github/{workflows,actions}/<name>@<sha>`. Pin to a commit SHA, not `@main`, for reproducible builds.
 
 ## License
 
