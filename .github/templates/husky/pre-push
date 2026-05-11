@@ -98,9 +98,24 @@ done
 #    works on TS repos (format/typecheck) and pure-JS repos (no
 #    prettier, no tsc) without copy/paste divergence.
 
+# Fail-explicit if package.json is missing or invalid JSON. Without
+# this, has_script would silently return false on every step (require
+# throws → exit non-zero), letting a misconfigured push proceed even
+# when no scripts are runnable. Block here so the developer fixes the
+# manifest before push.
+if ! node -e "require('./package.json')" 2>/dev/null; then
+  printf '[husky] package.json missing or invalid JSON — aborting push.\n'
+  printf '        Fix the manifest, or use `git push --no-verify` only if\n'
+  printf '        you are intentionally bypassing the hook.\n'
+  exit 1
+fi
+
 has_script() {
-  # Fast existence check via node, avoids spawning npm just to query.
-  node -e "process.exit(!!require('./package.json').scripts['$1'] ? 0 : 1)" 2>/dev/null
+  # Existence check via node, avoids spawning npm just to query.
+  # `require('./package.json')` cannot throw here because the
+  # fail-explicit guard above already validated the file. Returns 0
+  # if the script exists, 1 otherwise.
+  node -e "process.exit(require('./package.json').scripts && require('./package.json').scripts['$1'] ? 0 : 1)"
 }
 
 if has_script format:check; then
