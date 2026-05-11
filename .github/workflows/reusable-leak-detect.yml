@@ -1,0 +1,76 @@
+# Reusable workflow: scan a PR diff against the private leak-pattern
+# repo (klodr/.github_private).
+#
+# Consumed via:
+#   jobs:
+#     leak-detect:
+#       uses: klodr/.github/.github/workflows/reusable-leak-detect.yml@<sha>
+#       secrets:
+#         leak-detect-pat: ${{ secrets.LEAK_DETECT_PAT }}
+#
+# The PAT is a fine-grained PAT scoped to:
+#   - Repository access:   klodr/.github_private  (selected, only this one)
+#   - Repository perms:    Contents: Read
+# That minimum is enough to checkout, nothing more.
+
+name: Reusable / Leak detect (private patterns)
+
+on:
+  workflow_call:
+    inputs:
+      patterns-ref:
+        type: string
+        default: 'main'
+        description: 'Branch / tag / SHA of klodr/.github_private to use.'
+    secrets:
+      leak-detect-pat:
+        required: true
+        description: 'Fine-grained PAT, Contents:Read on klodr/.github_private only.'
+
+jobs:
+  scan:
+    name: Scan PR diff
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout caller repo (full history for diff)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout klodr/.github_private (patterns)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          repository: klodr/.github_private
+          ref: ${{ inputs.patterns-ref }}
+          token: ${{ secrets.leak-detect-pat }}
+          path: .leak-patterns-repo
+          persist-credentials: false
+
+      - name: Install yq (YAML parser)
+        run: |
+          set -euo pipefail
+          # yq from mikefarah, pinned + checksum-verified.
+          YQ_VERSION="v4.46.1"
+          YQ_ASSET="yq_linux_amd64"
+          BASE_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}"
+          curl -fsSL -o "/tmp/${YQ_ASSET}" "${BASE_URL}/${YQ_ASSET}"
+          curl -fsSL -o /tmp/checksums "${BASE_URL}/checksums"
+          grep " ${YQ_ASSET}\$" /tmp/checksums | sha256sum -c -
+          sudo install -m 0755 "/tmp/${YQ_ASSET}" /usr/local/bin/yq
+          yq --version
+
+      - name: Run scanner against PR diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEAK_PATTERNS_DIR: ${{ github.workspace }}/.leak-patterns-repo/leak-patterns
+        run: |
+          set -euo pipefail
+          git diff "$BASE_SHA...$HEAD_SHA" \
+            | bash .leak-patterns-repo/scripts/scan.sh
