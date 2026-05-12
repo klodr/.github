@@ -68,13 +68,15 @@ on:
         default: ""
       expected-fail-fast-stderr-pattern:
         description: >-
-          OPTIONAL extra regex (grep -Ei) that the stderr is allowed to
-          match on the exit=1 branch, in ADDITION to the
-          required-env-var name itself. Defaults to a permissive pattern
-          that requires the env var to be paired with "required" in
-          either order (e.g. `FAXDROP_API_KEY is required` or
-          `required env: FAXDROP_API_KEY`). Override only when the
-          runtime emits a non-trivial fail-fast message.
+          OPTIONAL extra regex (grep -Ei) that the stderr is allowed
+          to match on the exit=1 branch, in ADDITION to the
+          default matcher built from `required-env-var`. That
+          default accepts ANY of: the env-var name paired with
+          "required" in either order (e.g. `FAXDROP_API_KEY is
+          required` or `required env: FAXDROP_API_KEY`), OR a bare
+          mention of the env-var name on its own. Override only
+          when the runtime emits a non-trivial fail-fast message
+          that none of those three forms catch.
         type: string
         default: ""
       expected-lazy-auth-stderr-pattern:
@@ -135,15 +137,26 @@ jobs:
         # blow up at build time or silently produce an unusable image.
         # Reject up-front with a readable error instead of letting
         # buildkit fail downstream.
+        #
+        # Count non-empty entries after splitting on `,` and trimming
+        # whitespace rather than relying on `*,*`: that pattern misses
+        # the edge cases `linux/amd64,` (trailing comma after a single
+        # entry) and `, linux/amd64` (leading comma + space), both of
+        # which would otherwise sneak past the guard.
         env:
           PLATFORMS: ${{ inputs.platforms }}
         run: |
-          case "$PLATFORMS" in
-            *,*)
-              echo "::error::reusable-docker.yml: '$PLATFORMS' contains a CSV platform list, but the smoke-test path uses 'load: true' which can only materialise a single-platform image. Pin to a single platform (e.g. 'linux/amd64') or refactor the caller to a push-based pipeline." >&2
-              exit 1
-              ;;
-          esac
+          entries=$(
+            printf '%s\n' "$PLATFORMS" \
+              | tr ',' '\n' \
+              | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+              | sed '/^$/d' \
+              | wc -l
+          )
+          if [ "$entries" -ne 1 ]; then
+            echo "::error::reusable-docker.yml: '$PLATFORMS' resolves to $entries platforms, but the smoke-test path uses 'load: true' which can only materialise a single-platform image. Pin to exactly one platform (e.g. 'linux/amd64') or refactor the caller to a push-based pipeline." >&2
+            exit 1
+          fi
 
       - name: Build image (${{ inputs.platforms }}, tarball only — no push)
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0

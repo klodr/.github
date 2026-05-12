@@ -270,16 +270,28 @@ jobs:
         id: sbom_paths
         env:
           STAGING_DIR: ${{ inputs.release-assets-dir }}
+          SIGNED_ARTIFACT_PATH: ${{ inputs.signed-artifact-path }}
         run: |
           if [ -n "$STAGING_DIR" ]; then
-            # Standalone staging dir for plugins that don't have a `dist/`.
+            # Standalone staging dir for plugins that don't have a
+            # `dist/` after their build (or no build at all).
             mkdir -p "$STAGING_DIR"
             SPDX_PATH="${STAGING_DIR}/sbom.spdx.json"
             CDX_PATH="${STAGING_DIR}/sbom.cdx.json"
           else
-            # Legacy MCP layout: emit beside the bundled artifact.
-            SPDX_PATH="dist/sbom.spdx.json"
-            CDX_PATH="dist/sbom.cdx.json"
+            # Default to the signed-artifact's own directory so the
+            # SBOMs land next to the binary they describe. For
+            # bundled MCPs that's `dist/`; for a no-build caller
+            # that overrides only `signed-artifact-path` (e.g. an
+            # unbundled plugin pointing at `src/index.js`) this
+            # avoids hard-coding `dist/` — a folder that may not
+            # exist on those callers — and removes the need for a
+            # second `release-assets-dir` override just to host the
+            # SBOMs.
+            DEFAULT_DIR="$(dirname "$SIGNED_ARTIFACT_PATH")"
+            mkdir -p "$DEFAULT_DIR"
+            SPDX_PATH="${DEFAULT_DIR}/sbom.spdx.json"
+            CDX_PATH="${DEFAULT_DIR}/sbom.cdx.json"
           fi
           {
             echo "spdx=${SPDX_PATH}"
@@ -413,7 +425,31 @@ jobs:
           npm pkg delete scripts.prepare || true
           npm pkg delete scripts.prepublishOnly || true
 
+      # Probe the registry for the exact name@version BEFORE handing
+      # control to `npm publish`. The publish step is the only
+      # non-idempotent external write in this workflow; a rerun
+      # (manual re-trigger after a transient downstream failure, a
+      # workflow_dispatch on the existing tag, a hotfix that re-runs
+      # the whole `release` job) would otherwise hit the registry's
+      # 403 "cannot publish over previously published version" and
+      # fail the rerun even though the artifact is already live.
+      # Treat "already published" as a successful no-op instead.
+      - name: Probe npm registry for this version
+        id: npm_probe
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
+        run: |
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${PACKAGE_NAME}@${PACKAGE_VERSION} is already on the registry — skipping publish on this rerun."
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish to npm
+        if: steps.npm_probe.outputs.already_published != 'true'
         run: npm publish --access public --provenance --ignore-scripts
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
