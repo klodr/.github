@@ -5,14 +5,14 @@
 # Copy verbatim into each consumer repo's .husky/pre-commit.
 #
 # Two responsibilities:
-#   1. Refuse the commit when a CLI invoked by lint-staged is missing
-#      both from PATH and from ./node_modules/.bin. lint-staged would
-#      otherwise die mid-commit with a cryptic "<tool>: command not
-#      found"; refuse upfront instead.
-#   2. Run lint-staged via the local binary path (NOT npx). Some npm
-#      versions still attempt a registry fetch on `npx --no` despite
-#      the --no flag; calling the binary directly removes any ambiguity
-#      and guarantees the lockfile-pinned version is what runs.
+#   1. WARN (don't block) when a system CLI invoked by lint-staged is
+#      missing from PATH and ./node_modules/.bin. CI is the hard gate;
+#      this hook is a courtesy to save the developer a round trip.
+#      If a missing tool is actually needed for staged files,
+#      lint-staged will naturally fail on the file-type rule. If no
+#      file requires it, the commit passes — which is the point.
+#   2. lint-staged itself is required (gate dur): without it the hook
+#      is a no-op, so refuse the commit until `npm install` runs.
 #
 # A consumer repo whose lint-staged or scripts need more system tools
 # may extend REQUIRED_TOOLS in its own .husky/pre-commit copy.
@@ -28,8 +28,7 @@ for tool in $REQUIRED_TOOLS; do
 done
 
 if [ -n "$missing" ]; then
-  printf '[husky] ERROR — required tooling missing:%s\n' "$missing" >&2
-  exit 1
+  printf '[husky] WARN — missing tooling:%s — CI may reject this commit.\n' "$missing" >&2
 fi
 
 if [ ! -x "./node_modules/.bin/lint-staged" ]; then
