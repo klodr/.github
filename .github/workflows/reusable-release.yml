@@ -28,11 +28,33 @@ name: Reusable / Release & npm publish
 #     push:
 #       tags: ["v*"]
 #     workflow_dispatch: {}
+#   # Caller-level `permissions:` is the CEILING. Leave it on
+#   # `contents: read` so any future second job in the caller can't
+#   # accidentally inherit write scope. The release job below requests
+#   # the wider grant explicitly at job level — that's allowed because
+#   # GitHub treats reusable-workflow `jobs.*.permissions` as a request
+#   # that must not exceed the caller's ceiling. Granting at the job
+#   # level (not the workflow level) keeps the surface area pinned to
+#   # the one job that actually needs it.
 #   permissions:
 #     contents: read
 #   jobs:
 #     release:
 #       uses: klodr/.github/.github/workflows/reusable-release.yml@<reachable-sha>
+#       # The reusable workflow's `publish` job needs:
+#       #   - contents: write       — `gh release create` + attach assets
+#       #   - id-token: write       — Sigstore keyless OIDC for attest +
+#       #                             npm publish --provenance
+#       #   - attestations: write   — actions/attest-build-provenance +
+#       #                             actions/attest-sbom upload
+#       # Re-declare the grant on the caller job so the reusable job
+#       # below it has the budget it needs. The reusable itself
+#       # re-states the same grant at its own job level — both must
+#       # match for GitHub to honour the request.
+#       permissions:
+#         contents: write
+#         id-token: write
+#         attestations: write
 #       with:
 #         npm-package-name: "@klodr/gmail-mcp"  # bundled MCP, scoped
 #         # npm-package-name: "faxdrop-mcp"     # bundled MCP, unscoped

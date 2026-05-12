@@ -106,13 +106,16 @@ on:
         type: string
         default: "5"
 
-permissions:
-  contents: read
-
 jobs:
   build:
     name: Build Docker image
     runs-on: ubuntu-latest
+    # Scope the permission grant at the job level rather than the
+    # workflow level — klodr coding guideline for reusable workflows.
+    # Keeps `contents: read` isolated to this job so any future second
+    # job added below has to opt in explicitly.
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -123,6 +126,24 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Validate platforms input (load:true is single-platform only)
+        # `docker/build-push-action@v7.1.0` with `load: true` cannot
+        # export a multi-platform manifest list into the local Docker
+        # image store — the next steps then `docker inspect` / `docker
+        # run` a single image, so a CSV `platforms:` input would either
+        # blow up at build time or silently produce an unusable image.
+        # Reject up-front with a readable error instead of letting
+        # buildkit fail downstream.
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          case "$PLATFORMS" in
+            *,*)
+              echo "::error::reusable-docker.yml: '$PLATFORMS' contains a CSV platform list, but the smoke-test path uses 'load: true' which can only materialise a single-platform image. Pin to a single platform (e.g. 'linux/amd64') or refactor the caller to a push-based pipeline." >&2
+              exit 1
+              ;;
+          esac
 
       - name: Build image (${{ inputs.platforms }}, tarball only — no push)
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
@@ -193,7 +214,10 @@ jobs:
               # Only acceptable when the caller opted into a lazy-auth
               # boot AND the proof-of-lazy-boot stderr is present.
               # Without these, exit 0 is a silent crash.
-              if [ -n "$LAZY_AUTH_PATTERN" ] && echo "$out" | grep -qF "$LAZY_AUTH_PATTERN"; then
+              # `--` terminator so a caller-supplied pattern that
+              # happens to start with `-` is treated as the pattern
+              # itself rather than a grep option.
+              if [ -n "$LAZY_AUTH_PATTERN" ] && echo "$out" | grep -qF -- "$LAZY_AUTH_PATTERN"; then
                 echo "Startup OK (exit=0 — lazy-auth boot, stdin EOF closed transport)"
               else
                 echo "Exit 0 without the expected lazy-auth signal — real crash or wrong entrypoint" >&2
@@ -211,12 +235,15 @@ jobs:
               matched=false
               if [ -n "$REQUIRED_ENV_VAR" ]; then
                 default_pat="${REQUIRED_ENV_VAR}.*required|required.*${REQUIRED_ENV_VAR}|${REQUIRED_ENV_VAR}"
-                if echo "$out" | grep -qEi "$default_pat"; then
+                # `--` terminator: `$default_pat` interpolates a
+                # user-supplied `required-env-var` input that could
+                # start with `-`.
+                if echo "$out" | grep -qEi -- "$default_pat"; then
                   matched=true
                 fi
               fi
               if [ "$matched" = "false" ] && [ -n "$FAIL_FAST_PATTERN" ]; then
-                if echo "$out" | grep -qEi "$FAIL_FAST_PATTERN"; then
+                if echo "$out" | grep -qEi -- "$FAIL_FAST_PATTERN"; then
                   matched=true
                 fi
               fi
