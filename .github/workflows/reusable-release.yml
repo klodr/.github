@@ -1,0 +1,397 @@
+name: Reusable / Release & npm publish
+
+# Centralised tag-driven release pipeline for klodr/* npm packages.
+# Triggered by `git push origin vX.Y.Z` on the CALLER side; the caller is
+# a thin wrapper that delegates to this reusable.
+#
+# What this reusable does (per release):
+#   1. Build & Test on Node N (caller-overridable).
+#   2. Mint a GitHub Release with notes extracted from CHANGELOG.md for
+#      the tagged version (fail-fast if the section is missing or if the
+#      tag doesn't match package.json version).
+#   3. Generate a Sigstore keyless attestation for the published artifact
+#      via actions/attest-build-provenance (signed=8/10 + provenance=10/10
+#      on OpenSSF Scorecard).
+#   4. Generate SPDX 2.3 + CycloneDX 1.6 SBOMs of the runtime dep tree
+#      (devDependencies pruned first), then sign both with Sigstore.
+#   5. Upload the signed artifact, the .intoto.jsonl extracted from the
+#      Sigstore bundle's DSSE envelope, and both SBOMs (raw + signed) as
+#      Release assets.
+#   6. Publish to npm with provenance — `prepare` + `prepublishOnly` are
+#      stripped from package.json before publish so the now-pruned dev
+#      tooling (husky / tsup) can't be invoked at publish time.
+#
+# Caller pattern (~15 lines):
+#
+#   name: Release & npm publish
+#   on:
+#     push:
+#       tags: ["v*"]
+#     workflow_dispatch: {}
+#   permissions:
+#     contents: read
+#   jobs:
+#     release:
+#       uses: klodr/.github/.github/workflows/reusable-release.yml@<reachable-sha>
+#       with:
+#         npm-package-name: "@klodr/gmail-mcp"  # bundled MCP, scoped
+#         # npm-package-name: "faxdrop-mcp"     # bundled MCP, unscoped
+#         # signed-artifact-path: "src/index.js" # unbundled plugin
+#         # build-script: ""                     # disable build step
+#         # test-script: "test"                  # no coverage
+#       secrets:
+#         npm-token: ${{ secrets.NPM_TOKEN }}
+
+on:
+  workflow_call:
+    inputs:
+      npm-package-name:
+        description: >-
+          npm package name used to build the changelog link (e.g.
+          "@klodr/gmail-mcp", "faxdrop-mcp"). Must match the `name` field
+          of package.json — npm publish reads its own value from package.json,
+          this input only feeds the GitHub Release notes link.
+        type: string
+        required: true
+      node-version:
+        description: "Node.js version used for build + publish."
+        type: string
+        default: "22"
+      build-script:
+        description: >-
+          npm script for the production build. Empty string disables the
+          build step (e.g. eslint-plugin which ships src/ as-is).
+        type: string
+        default: "build"
+      lint-script:
+        description: >-
+          npm script for an OPTIONAL pre-test lint pass. Empty string
+          skips it. Used by eslint-plugin-security-mcp where `lint` runs
+          before `test` in the build job.
+        type: string
+        default: ""
+      test-script:
+        description: >-
+          npm script used for tests in the build job. Defaults to
+          "test:coverage" since every klodr MCP exposes that script;
+          plugins without coverage tooling pass "test".
+        type: string
+        default: "test:coverage"
+      signed-artifact-path:
+        description: >-
+          Path to the artifact whose Sigstore attestation is published.
+          MCPs that bundle via tsup use "dist/index.js" (default).
+          eslint-plugin-security-mcp ships src/ unbundled and passes
+          "src/index.js".
+        type: string
+        default: "dist/index.js"
+      release-assets-dir:
+        description: >-
+          Staging directory under which signed assets are assembled
+          before `gh release upload`. The directory MUST contain the
+          artifact, the .sigstore bundles, both SBOMs (raw + signed)
+          and the .intoto.jsonl envelope. Empty string keeps everything
+          under `dist/` (legacy MCP layout); a non-empty value (e.g.
+          "release-assets") opts into a standalone staging dir.
+        type: string
+        default: ""
+    secrets:
+      npm-token:
+        description: "npm automation token with publish rights on the package."
+        required: true
+
+# Caller-level permissions cap what the called workflow can request at
+# the job level. The `publish` job below escalates to contents:write +
+# id-token:write + attestations:write — make sure the caller grants
+# `contents: read` at minimum (the publish job widens within that
+# ceiling). The build job stays read-only.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node ${{ inputs.node-version }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        if: inputs.build-script != ''
+        env:
+          BUILD_SCRIPT: ${{ inputs.build-script }}
+        run: npm run "$BUILD_SCRIPT"
+
+      - name: Lint
+        if: inputs.lint-script != ''
+        env:
+          LINT_SCRIPT: ${{ inputs.lint-script }}
+        run: npm run "$LINT_SCRIPT"
+
+      - name: Test
+        env:
+          TEST_SCRIPT: ${{ inputs.test-script }}
+        run: npm run "$TEST_SCRIPT"
+
+  publish:
+    name: Create release, sign artifacts, publish to npm
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload signed artifacts to the GitHub Release
+      id-token: write # npm provenance + Sigstore keyless signing
+      attestations: write # actions/attest-build-provenance writes to the attestation API
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Node ${{ inputs.node-version }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (production, sourcemaps stripped)
+        if: inputs.build-script != ''
+        env:
+          NODE_ENV: production
+          BUILD_SCRIPT: ${{ inputs.build-script }}
+        run: npm run "$BUILD_SCRIPT"
+
+      # npm ci above runs without NODE_ENV=production, so it installs the
+      # devDependencies needed to build. Now that the artifact is ready,
+      # prune them so the SBOM reflects the RUNTIME dependency tree, not
+      # the build toolchain — otherwise downstream scanners flag tsup /
+      # typescript / vitest CVEs that can't reach a consumer's process.
+      - name: Prune devDependencies before SBOM generation
+        run: npm prune --omit=dev
+
+      # Extract the CHANGELOG section for this version. Fail fast if
+      # missing, so we never publish a version with no notes.
+      - name: Extract changelog section for ${{ github.ref_name }}
+        id: changelog
+        env:
+          TAG: ${{ github.ref_name }}
+          NPM_PACKAGE_NAME: ${{ inputs.npm-package-name }}
+        run: |
+          VERSION="${TAG#v}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$PACKAGE_VERSION" != "$VERSION" ]; then
+            echo "ERROR: tag $TAG does not match package.json version $PACKAGE_VERSION" >&2
+            exit 1
+          fi
+          NOTES=$(awk -v ver="^## \\\\[${VERSION}\\\\]" '$0 ~ ver {flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md)
+          if [ -z "$(echo "$NOTES" | tr -d '[:space:]')" ]; then
+            echo "ERROR: no CHANGELOG.md section found for version $VERSION" >&2
+            exit 1
+          fi
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$NOTES"
+            echo ""
+            echo "**Full changelog:** https://github.com/${{ github.repository }}/blob/${TAG}/CHANGELOG.md"
+            echo "**npm:** https://www.npmjs.com/package/${NPM_PACKAGE_NAME}/v/${VERSION}"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Idempotent so a re-run after a later-step failure does not
+      # block here.
+      - name: Create or update GitHub Release for ${{ github.ref_name }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          NOTES: ${{ steps.changelog.outputs.notes }}
+        run: |
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release edit "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --repo "${{ github.repository }}"
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes "$NOTES" \
+              --repo "${{ github.repository }}"
+          fi
+
+      # Sign + upload signed assets BEFORE the (non-idempotent) npm
+      # publish, so a transient failure on signing or asset upload
+      # doesn't leave us stuck with a published version we cannot re-run
+      # the workflow for.
+      - name: Generate Sigstore attestation for ${{ inputs.signed-artifact-path }}
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: ${{ inputs.signed-artifact-path }}
+
+      # SBOMs of the runtime dependency tree (devDependencies pruned
+      # above). syft walks the lockfile + node_modules and produces SPDX
+      # (json) + CycloneDX (json) — both shipped so downstream consumers
+      # can pick whichever their scanner speaks.
+      - name: Compute SBOM output paths
+        id: sbom_paths
+        env:
+          STAGING_DIR: ${{ inputs.release-assets-dir }}
+        run: |
+          if [ -n "$STAGING_DIR" ]; then
+            # Standalone staging dir for plugins that don't have a `dist/`.
+            mkdir -p "$STAGING_DIR"
+            SPDX_PATH="${STAGING_DIR}/sbom.spdx.json"
+            CDX_PATH="${STAGING_DIR}/sbom.cdx.json"
+          else
+            # Legacy MCP layout: emit beside the bundled artifact.
+            SPDX_PATH="dist/sbom.spdx.json"
+            CDX_PATH="dist/sbom.cdx.json"
+          fi
+          {
+            echo "spdx=${SPDX_PATH}"
+            echo "cdx=${CDX_PATH}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate SPDX SBOM (SPDX 2.3 JSON)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: ${{ steps.sbom_paths.outputs.spdx }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      - name: Generate CycloneDX SBOM (1.6 JSON)
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: ${{ steps.sbom_paths.outputs.cdx }}
+          upload-artifact: false
+          upload-release-assets: false
+
+      # Sign both SBOMs with Sigstore (keyless, via GitHub OIDC) so
+      # downstream consumers can prove the SBOM came from THIS
+      # release-on-this-repo, not a trojaned copy. We use actions/attest
+      # (the direct action) — actions/attest-sbom is a deprecated
+      # compatibility wrapper per GitHub's own docs.
+      - name: Sign SPDX SBOM attestation
+        id: attest_spdx
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: ${{ inputs.signed-artifact-path }}
+          sbom-path: ${{ steps.sbom_paths.outputs.spdx }}
+
+      - name: Sign CycloneDX SBOM attestation
+        id: attest_cdx
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: ${{ inputs.signed-artifact-path }}
+          sbom-path: ${{ steps.sbom_paths.outputs.cdx }}
+
+      - name: Attach signed artifacts + SBOMs to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          SPDX_BUNDLE_PATH: ${{ steps.attest_spdx.outputs.bundle-path }}
+          CDX_BUNDLE_PATH: ${{ steps.attest_cdx.outputs.bundle-path }}
+          SIGNED_ARTIFACT_PATH: ${{ inputs.signed-artifact-path }}
+          STAGING_DIR: ${{ inputs.release-assets-dir }}
+          SPDX_PATH: ${{ steps.sbom_paths.outputs.spdx }}
+          CDX_PATH: ${{ steps.sbom_paths.outputs.cdx }}
+        run: |
+          test -n "${BUNDLE_PATH:-}" || { echo "Missing attestation bundle-path output"; exit 1; }
+          test -f "$BUNDLE_PATH" || { echo "Bundle file not found: $BUNDLE_PATH"; exit 1; }
+          test -n "${SPDX_BUNDLE_PATH:-}" || { echo "Missing SPDX SBOM attestation bundle-path"; exit 1; }
+          test -f "$SPDX_BUNDLE_PATH" || { echo "SPDX SBOM attestation bundle not found: $SPDX_BUNDLE_PATH"; exit 1; }
+          test -n "${CDX_BUNDLE_PATH:-}" || { echo "Missing CycloneDX SBOM attestation bundle-path"; exit 1; }
+          test -f "$CDX_BUNDLE_PATH" || { echo "CycloneDX SBOM attestation bundle not found: $CDX_BUNDLE_PATH"; exit 1; }
+          test -f "$SPDX_PATH" || { echo "SPDX SBOM missing at $SPDX_PATH"; exit 1; }
+          test -f "$CDX_PATH" || { echo "CycloneDX SBOM missing at $CDX_PATH"; exit 1; }
+          if [ -n "$STAGING_DIR" ]; then
+            # Standalone staging dir: copy the artifact + bundles in.
+            mkdir -p "$STAGING_DIR"
+            ARTIFACT_BASENAME=$(basename "$SIGNED_ARTIFACT_PATH")
+            cp "$SIGNED_ARTIFACT_PATH" "$STAGING_DIR/${ARTIFACT_BASENAME}"
+            ARTIFACT_OUT="$STAGING_DIR/${ARTIFACT_BASENAME}"
+            SIGSTORE_OUT="$STAGING_DIR/${ARTIFACT_BASENAME}.sigstore"
+            INTOTO_OUT="$STAGING_DIR/${ARTIFACT_BASENAME}.intoto.jsonl"
+            SPDX_SIGSTORE_OUT="$STAGING_DIR/sbom.spdx.sigstore"
+            CDX_SIGSTORE_OUT="$STAGING_DIR/sbom.cdx.sigstore"
+          else
+            # Legacy MCP layout: emit beside the bundled artifact in dist/.
+            ARTIFACT_OUT="$SIGNED_ARTIFACT_PATH"
+            SIGSTORE_OUT="${SIGNED_ARTIFACT_PATH}.sigstore"
+            INTOTO_OUT="${SIGNED_ARTIFACT_PATH}.intoto.jsonl"
+            SPDX_SIGSTORE_OUT="$(dirname "$SPDX_PATH")/sbom.spdx.sigstore"
+            CDX_SIGSTORE_OUT="$(dirname "$CDX_PATH")/sbom.cdx.sigstore"
+          fi
+          # The Sigstore bundle (.sigstore) satisfies Scorecard's
+          # "signed" check (8/10).
+          cp "$BUNDLE_PATH" "$SIGSTORE_OUT"
+          cp "$SPDX_BUNDLE_PATH" "$SPDX_SIGSTORE_OUT"
+          cp "$CDX_BUNDLE_PATH" "$CDX_SIGSTORE_OUT"
+          # The DSSE envelope inside the bundle IS the SLSA in-toto
+          # attestation. Extracting it to .intoto.jsonl satisfies
+          # Scorecard's "provenance" check (10/10) — Scorecard recognises
+          # *.intoto.jsonl specifically.
+          DSSE=$(jq -c '.dsseEnvelope' "$BUNDLE_PATH")
+          if [ -z "$DSSE" ] || [ "$DSSE" = "null" ]; then
+            echo "ERROR: no .dsseEnvelope in Sigstore bundle at $BUNDLE_PATH" >&2
+            exit 1
+          fi
+          printf '%s\n' "$DSSE" > "$INTOTO_OUT"
+          gh release upload "$TAG" \
+            "$ARTIFACT_OUT" \
+            "$SIGSTORE_OUT" \
+            "$INTOTO_OUT" \
+            "$SPDX_PATH" \
+            "$SPDX_SIGSTORE_OUT" \
+            "$CDX_PATH" \
+            "$CDX_SIGSTORE_OUT" \
+            --repo "${{ github.repository }}" \
+            --clobber
+
+      # `npm prune --omit=dev` above removed any build / test tooling
+      # that lives in devDependencies (tsup, husky, vitest, ...). Any
+      # lifecycle script that still references one of those will fail at
+      # publish time:
+      #   - `prepublishOnly: npm run build` would re-run the bundler
+      #   - `prepare: husky` would re-run husky (`husky: not found`)
+      #
+      # `--ignore-scripts` is documented to skip lifecycle scripts at
+      # publish time, but in practice npm 10.9 still runs `prepare`
+      # during the pack/publish prep. Stripping those keys from
+      # `package.json` is the robust fix.
+      #
+      # NOTE: npm always includes `package.json` in the tarball
+      # regardless of the `files` field, so the *published* manifest
+      # will lack `prepare` / `prepublishOnly`. That divergence is
+      # intentional and harmless: consumers do not run `prepare` on
+      # installed packages (it only fires for the package owner's local
+      # install / publish cycle).
+      - name: Strip prepare + prepublishOnly before publish
+        # `|| true` tolerates an absent key — `npm pkg delete` exits
+        # non-zero when the key is missing, which would block the job if
+        # a future commit removes one of these scripts from package.json.
+        run: |
+          npm pkg delete scripts.prepare || true
+          npm pkg delete scripts.prepublishOnly || true
+
+      - name: Publish to npm
+        run: npm publish --access public --provenance --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm-token }}
