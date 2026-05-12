@@ -66,6 +66,25 @@ jobs:
           path: .leak-patterns-repo
           persist-credentials: false
 
+      - name: Install libphonenumber-js (phone validation in scan.sh)
+        # scan.sh special-cases the `phone-*` patterns: a regex
+        # pre-filter extracts 10-digit candidates, then
+        # `scripts/validate-phones.mjs` re-validates each via
+        # libphonenumber-js before a finding fires. Without this
+        # `npm ci`, the validator would `MODULE_NOT_FOUND` and scan.sh
+        # would `exit 2` for safety. Node 22 ships with ubuntu-latest.
+        working-directory: .leak-patterns-repo
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          # `--omit=dev --ignore-scripts --no-audit --no-fund` keeps the
+          # install ~3-5s on a clean runner. `--ignore-scripts` matters:
+          # libphonenumber-js doesn't ship lifecycle hooks but pinning
+          # the posture here makes a future transitive `postinstall`
+          # require a deliberate flag flip.
+          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Install yq (YAML parser)
         run: |
           set -euo pipefail
