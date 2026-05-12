@@ -70,12 +70,26 @@ jobs:
         # scan.sh special-cases the `phone-*` patterns: a regex
         # pre-filter extracts 10-digit candidates, then
         # `scripts/validate-phones.mjs` re-validates each via
-        # libphonenumber-js before a finding fires. Without this
-        # `npm ci`, the validator would `MODULE_NOT_FOUND` and scan.sh
-        # would `exit 2` for safety. Node 22 ships with ubuntu-latest.
+        # libphonenumber-js before a finding fires.
+        #
+        # `inputs.patterns-ref` lets a caller pin an arbitrary
+        # branch/tag/SHA of klodr/.github_private. Older refs
+        # (anything before the libphonenumber rollout) won't carry a
+        # `package-lock.json` or a `package.json`, and `npm ci`
+        # against either of those refs would exit `EUSAGE` and break
+        # the whole leak-detect job. Probe both files and skip the
+        # install when they're absent — scan.sh's `phone-*` branch
+        # only short-circuits on a missing `validate-phones.mjs`,
+        # which is the actual contract this dependency satisfies.
+        # Node 22 ships with ubuntu-latest.
         working-directory: .leak-patterns-repo
         run: |
           set -euo pipefail
+          if [ ! -f package.json ] || [ ! -f package-lock.json ]; then
+            echo "leak-detect: patterns-ref ${{ inputs.patterns-ref }} has no package.json/package-lock.json — skipping npm ci."
+            echo "leak-detect: phone-pattern validation (libphonenumber-js) will be inactive on this run."
+            exit 0
+          fi
           node --version
           npm --version
           # `--omit=dev --ignore-scripts --no-audit --no-fund` keeps the
