@@ -31,7 +31,7 @@ workflow_changed=0
 #    on stdin: `<local_ref> <local_sha> <remote_ref> <remote_sha>`.
 #    Walking only HEAD would let a multi-commit push smuggle through
 #    earlier commits with a bad signature or an overlong subject.
-while read -r local_ref local_sha remote_ref remote_sha; do
+while read -r _local_ref local_sha _remote_ref remote_sha; do
   if [ "$local_sha" = "$z40" ]; then
     # Branch deletion — nothing to validate.
     continue
@@ -153,7 +153,13 @@ if [ "$workflow_changed" -eq 1 ] && command -v pinact >/dev/null 2>&1; then
   }
 fi
 
-echo "[husky] audit (high+)..."
-npm audit --audit-level=high
+# `npm audit` is intentionally NOT run here. Its result depends on
+# live registry advisory state — a transient network blip or a
+# brand-new transitive advisory can block a push that's otherwise
+# clean. Server-side advisory enforcement is delegated to whatever
+# vulnerability surface each consumer repo wires up (the klodr/* MCPs
+# run OSV-Scanner + Dependabot; this `.github` org-template repo has
+# only its own org-level Dependabot security alerts). Keeping the
+# local hook deterministic: same inputs → same outcome.
 
 echo "[husky] all checks passed -> pushing"
