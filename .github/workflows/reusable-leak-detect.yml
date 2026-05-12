@@ -6,12 +6,14 @@
 #     leak-detect:
 #       uses: klodr/.github/.github/workflows/reusable-leak-detect.yml@<sha>
 #       secrets:
-#         leak-detect-pat: ${{ secrets.LEAK_DETECT_PAT }}
+#         leak-detect-client-id: ${{ secrets.LEAK_DETECT_CLIENT_ID }}
+#         leak-detect-app-private-key: ${{ secrets.LEAK_DETECT_APP_PRIVATE_KEY }}
 #
-# The PAT is a fine-grained PAT scoped to:
-#   - Repository access:   klodr/.github_private  (selected, only this one)
-#   - Repository perms:    Contents: Read
-# That minimum is enough to checkout, nothing more.
+# The GitHub App backing those secrets must be installed on
+# klodr/.github_private with:
+#   - Repository permissions: Contents: Read
+# Tokens generated below are scoped to that single repo, short-lived
+# (one job run), and not bound to any user account.
 
 name: Reusable / Leak detect (private patterns)
 
@@ -23,9 +25,12 @@ on:
         default: "main"
         description: "Branch / tag / SHA of klodr/.github_private to use."
     secrets:
-      leak-detect-pat:
+      leak-detect-client-id:
         required: true
-        description: "Fine-grained PAT, Contents:Read on klodr/.github_private only."
+        description: "GitHub App Client ID for the leak-detect bot."
+      leak-detect-app-private-key:
+        required: true
+        description: "GitHub App private key (PEM) for the leak-detect bot."
 
 jobs:
   scan:
@@ -37,6 +42,15 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      - name: Generate App token (scoped to klodr/.github_private)
+        id: app-token
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          client-id: ${{ secrets.leak-detect-client-id }}
+          private-key: ${{ secrets.leak-detect-app-private-key }}
+          owner: klodr
+          repositories: .github_private
+
       - name: Checkout caller repo (full history for diff)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -48,7 +62,7 @@ jobs:
         with:
           repository: klodr/.github_private
           ref: ${{ inputs.patterns-ref }}
-          token: ${{ secrets.leak-detect-pat }}
+          token: ${{ steps.app-token.outputs.token }}
           path: .leak-patterns-repo
           persist-credentials: false
 
