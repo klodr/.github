@@ -70,12 +70,42 @@ jobs:
         run: |
           set -euo pipefail
           # yq from mikefarah, pinned + checksum-verified.
+          #
+          # mikefarah/yq's `checksums` file is multi-column (filename,
+          # md5, sha1, sha256, bsd, …) — not the single-hash format
+          # `sha256sum -c` expects. The companion file
+          # `checksums_hashes_order` tells us which column carries the
+          # SHA-256 digest, so we extract it explicitly instead of
+          # piping the raw line through `sha256sum -c`.
           YQ_VERSION="v4.46.1"
           YQ_ASSET="yq_linux_amd64"
           BASE_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}"
           curl -fsSL -o "/tmp/${YQ_ASSET}" "${BASE_URL}/${YQ_ASSET}"
           curl -fsSL -o /tmp/checksums "${BASE_URL}/checksums"
-          grep " ${YQ_ASSET}\$" /tmp/checksums | sha256sum -c -
+          curl -fsSL -o /tmp/checksums_hashes_order \
+            "${BASE_URL}/checksums_hashes_order"
+          # Column 1 in `checksums` is the filename; subsequent columns
+          # follow the order declared in `checksums_hashes_order`. Find
+          # the SHA-256 line number, +1 to skip the filename column.
+          sha256_line=$(grep -n '^SHA-256$' /tmp/checksums_hashes_order \
+                        | cut -d: -f1 || true)
+          if [ -z "$sha256_line" ]; then
+            echo "leak-detect: unable to locate SHA-256 column in checksums_hashes_order" >&2
+            exit 1
+          fi
+          sha256_col=$((sha256_line + 1))
+          expected_sha=$(awk -v asset="$YQ_ASSET" -v c="$sha256_col" \
+            '$1 == asset { print $c; exit }' /tmp/checksums)
+          if ! printf '%s' "$expected_sha" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "leak-detect: unable to parse expected SHA-256 for ${YQ_ASSET}" >&2
+            exit 1
+          fi
+          actual_sha=$(sha256sum "/tmp/${YQ_ASSET}" | awk '{print $1}')
+          if [ "$expected_sha" != "$actual_sha" ]; then
+            printf 'yq checksum mismatch: expected=%s actual=%s\n' \
+              "$expected_sha" "$actual_sha" >&2
+            exit 1
+          fi
           sudo install -m 0755 "/tmp/${YQ_ASSET}" /usr/local/bin/yq
           yq --version
 
