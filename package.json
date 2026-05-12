@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "description": "Org-level reusable workflows, composite actions and shared templates for klodr/* repos.",
+  "engines": {
+    "node": ">=22.22.2"
+  },
+  "packageManager": "npm@10.9.7",
   "scripts": {
     "format": "prettier --write .",
     "format:check": "prettier --check .",
