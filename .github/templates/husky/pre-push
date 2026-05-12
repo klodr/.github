@@ -45,6 +45,11 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
     range_args="$remote_sha..$local_sha"
   fi
 
+  # shellcheck disable=SC2086 # range_args is intentionally word-split:
+  # on a new branch it expands to "<sha> --not --remotes=<remote>"
+  # (three args), on an existing ref to "<old>..<new>" (one arg).
+  # Quoting it would join the new-branch case into a single positional
+  # arg and `git rev-list` would reject it as a bad commit-ish.
   for sha in $(git rev-list $range_args); do
     if [ "$workflow_changed" -eq 0 ] \
       && git show --pretty='' --name-only "$sha" \
@@ -72,6 +77,9 @@ while read -r _local_ref local_sha _remote_ref remote_sha; do
         printf '[husky] commit %s signature is "%s" (expected G/U/X/Y).\n' "$sha" "$sig"
         printf '        subject: %s\n' "$subject"
         printf '        Configure SSH signing or set commit.gpgsign=true.\n'
+        # shellcheck disable=SC2016 # backticks are markdown inline code,
+        # not a command substitution — we want them rendered verbatim
+        # in the developer-facing help text.
         printf '        See `git log --format=%%G?` legend for status meanings.\n'
         exit 1
         ;;
@@ -105,6 +113,8 @@ done
 # manifest before push.
 if ! node -e "require('./package.json')" 2>/dev/null; then
   printf '[husky] package.json missing or invalid JSON — aborting push.\n'
+  # shellcheck disable=SC2016 # backticks render markdown inline code
+  # in the developer-facing help text, not a command substitution.
   printf '        Fix the manifest, or use `git push --no-verify` only if\n'
   printf '        you are intentionally bypassing the hook.\n'
   exit 1
