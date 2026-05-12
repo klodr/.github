@@ -1,0 +1,274 @@
+name: Reusable / Docker build
+
+# Centralised Docker build + smoke-test for klodr/* MCPs. Builds the
+# image, asserts OCI labels and non-root user, then runs a stdio MCP
+# smoke test that accepts the runtime's healthy startup shapes.
+#
+# Caller pattern (~15 lines):
+#
+#   name: Docker build
+#   on:
+#     push:
+#       branches: [main]
+#       paths:
+#         - "Dockerfile"
+#         - ".dockerignore"
+#         - "src/**"
+#         - "package.json"
+#         - "package-lock.json"
+#         - "tsconfig.json"
+#         - "tsup.config.ts"
+#         - ".github/workflows/docker.yml"
+#     pull_request:
+#       branches: [main]
+#       paths: [ ... same as push ... ]
+#   permissions:
+#     contents: read
+#   jobs:
+#     build:
+#       uses: klodr/.github/.github/workflows/reusable-docker.yml@<reachable-sha>
+#       with:
+#         image-tag: "faxdrop-mcp:ci"
+#         required-env-var: "FAXDROP_API_KEY"
+#
+# Why the smoke test matrix is so specific:
+#   stdio MCP servers block on stdin, so a healthy boot is one of:
+#     124 — `timeout` killed the process while it was waiting for stdin
+#           (this is the standard happy-path; covers any MCP that
+#           registers handlers then blocks on stdin).
+#     0   — only valid when `expected-lazy-auth-stderr-pattern` is set
+#           AND that grep -F pattern is present in stderr. Used by
+#           gmail-mcp's "lazy-auth boot, stdin EOF closed transport"
+#           branch. Without the stderr proof, exit 0 is treated as a
+#           silent crash and the job fails.
+#     1   — fail-fast when the required env var is missing. The stderr
+#           MUST grep-match either the env-var name itself or the
+#           caller-supplied `expected-fail-fast-stderr-pattern`
+#           (regex, grep -Ei). Otherwise it's a real crash.
+#   Any other exit code is flagged as a regression.
+
+on:
+  workflow_call:
+    inputs:
+      image-tag:
+        description: >-
+          Local image tag built and inspected by this workflow
+          (e.g. "faxdrop-mcp:ci"). Used only inside this job — it is
+          NOT pushed to a registry.
+        type: string
+        required: true
+      required-env-var:
+        description: >-
+          Name of the env var the runtime expects to fail-fast on when
+          missing (e.g. "FAXDROP_API_KEY"). When non-empty, the exit=1
+          branch of the smoke test checks that the stderr mentions this
+          variable. Pass empty string to disable the exit=1 branch
+          entirely (i.e. the runtime never fail-fasts on a missing var).
+        type: string
+        default: ""
+      expected-fail-fast-stderr-pattern:
+        description: >-
+          OPTIONAL extra regex (grep -Ei) that the stderr is allowed
+          to match on the exit=1 branch, in ADDITION to the
+          default matcher built from `required-env-var`. That
+          default accepts ANY of: the env-var name paired with
+          "required" in either order (e.g. `FAXDROP_API_KEY is
+          required` or `required env: FAXDROP_API_KEY`), OR a bare
+          mention of the env-var name on its own. Override only
+          when the runtime emits a non-trivial fail-fast message
+          that none of those three forms catch.
+        type: string
+        default: ""
+      expected-lazy-auth-stderr-pattern:
+        description: >-
+          OPTIONAL fixed-string (grep -F) that, if non-empty, opts into
+          the exit=0 lazy-auth branch. Set this to the EXACT log line
+          your runtime emits when it lazy-boots (e.g.
+          "booting in lazy-auth mode"). Without this, exit=0 is treated
+          as a silent crash.
+        type: string
+        default: ""
+      expected-non-root-user:
+        description: "Expected non-root USER in the built image."
+        type: string
+        default: "mcp"
+      platforms:
+        description: "Buildx platforms, default linux/amd64 (CI only — no push)."
+        type: string
+        default: "linux/amd64"
+      dockerfile-path:
+        description: "Path to the Dockerfile (default ./Dockerfile)."
+        type: string
+        default: "./Dockerfile"
+      smoke-test-timeout-seconds:
+        description: >-
+          Seconds before `timeout` kills the smoke-test container.
+          5 s matches the original klodr MCP suite — bump only if the
+          runtime registers its stdio handlers more slowly.
+        type: string
+        default: "5"
+
+jobs:
+  build:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    # Scope the permission grant at the job level rather than the
+    # workflow level — klodr coding guideline for reusable workflows.
+    # Keeps `contents: read` isolated to this job so any future second
+    # job added below has to opt in explicitly.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Read package version
+        id: pkg
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+      - name: Validate platforms input (load:true is single-platform only)
+        # `docker/build-push-action@v7.1.0` with `load: true` cannot
+        # export a multi-platform manifest list into the local Docker
+        # image store — the next steps then `docker inspect` / `docker
+        # run` a single image, so a CSV `platforms:` input would either
+        # blow up at build time or silently produce an unusable image.
+        # Reject up-front with a readable error instead of letting
+        # buildkit fail downstream.
+        #
+        # Count non-empty entries after splitting on `,` and trimming
+        # whitespace rather than relying on `*,*`: that pattern misses
+        # the edge cases `linux/amd64,` (trailing comma after a single
+        # entry) and `, linux/amd64` (leading comma + space), both of
+        # which would otherwise sneak past the guard.
+        env:
+          PLATFORMS: ${{ inputs.platforms }}
+        run: |
+          entries=$(
+            printf '%s\n' "$PLATFORMS" \
+              | tr ',' '\n' \
+              | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+              | sed '/^$/d' \
+              | wc -l
+          )
+          if [ "$entries" -ne 1 ]; then
+            echo "::error::reusable-docker.yml: '$PLATFORMS' resolves to $entries platforms, but the smoke-test path uses 'load: true' which can only materialise a single-platform image. Pin to exactly one platform (e.g. 'linux/amd64') or refactor the caller to a push-based pipeline." >&2
+            exit 1
+          fi
+
+      - name: Build image (${{ inputs.platforms }}, tarball only — no push)
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ${{ inputs.dockerfile-path }}
+          platforms: ${{ inputs.platforms }}
+          build-args: |
+            VERSION=${{ steps.pkg.outputs.version }}
+          push: false
+          load: true
+          tags: ${{ inputs.image-tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Assert OCI labels and non-root user
+        # Load-bearing for Docker MCP Registry ingestion — we fail CI
+        # here rather than silently ship an image without them.
+        env:
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          EXPECTED_VERSION: ${{ steps.pkg.outputs.version }}
+          EXPECTED_USER: ${{ inputs.expected-non-root-user }}
+        run: |
+          set -euo pipefail
+          labels_json=$(docker inspect --format='{{json .Config.Labels}}' "$IMAGE_TAG")
+          echo "$labels_json" | jq .
+          actual_version=$(echo "$labels_json" | jq -r '."org.opencontainers.image.version"')
+          if [ "$actual_version" != "$EXPECTED_VERSION" ]; then
+            echo "Expected org.opencontainers.image.version=$EXPECTED_VERSION, got '$actual_version'" >&2
+            exit 1
+          fi
+          for key in \
+            org.opencontainers.image.source \
+            org.opencontainers.image.licenses \
+            org.opencontainers.image.title \
+            org.opencontainers.image.description; do
+            value=$(echo "$labels_json" | jq -r --arg k "$key" '.[$k]')
+            if [ -z "$value" ] || [ "$value" = "null" ]; then
+              echo "Missing required OCI label: $key" >&2
+              exit 1
+            fi
+          done
+          user=$(docker inspect --format='{{.Config.User}}' "$IMAGE_TAG")
+          if [ "$user" != "$EXPECTED_USER" ]; then
+            echo "Expected non-root USER=$EXPECTED_USER, got '$user'" >&2
+            exit 1
+          fi
+
+      - name: Smoke-test (container is executable and reaches the entrypoint)
+        env:
+          IMAGE_TAG: ${{ inputs.image-tag }}
+          TIMEOUT_SECS: ${{ inputs.smoke-test-timeout-seconds }}
+          REQUIRED_ENV_VAR: ${{ inputs.required-env-var }}
+          LAZY_AUTH_PATTERN: ${{ inputs.expected-lazy-auth-stderr-pattern }}
+          FAIL_FAST_PATTERN: ${{ inputs.expected-fail-fast-stderr-pattern }}
+        run: |
+          set +e
+          out=$(timeout "$TIMEOUT_SECS" docker run --rm "$IMAGE_TAG" < /dev/null 2>&1)
+          ec=$?
+          echo "$out"
+          case $ec in
+            124)
+              # Timeout = server is alive and waiting for stdin
+              # (needed real credentials, which CI does not ship).
+              echo "Startup OK (exit=124 — stdin wait)"
+              ;;
+            0)
+              # Only acceptable when the caller opted into a lazy-auth
+              # boot AND the proof-of-lazy-boot stderr is present.
+              # Without these, exit 0 is a silent crash.
+              # `--` terminator so a caller-supplied pattern that
+              # happens to start with `-` is treated as the pattern
+              # itself rather than a grep option.
+              if [ -n "$LAZY_AUTH_PATTERN" ] && echo "$out" | grep -qF -- "$LAZY_AUTH_PATTERN"; then
+                echo "Startup OK (exit=0 — lazy-auth boot, stdin EOF closed transport)"
+              else
+                echo "Exit 0 without the expected lazy-auth signal — real crash or wrong entrypoint" >&2
+                exit 1
+              fi
+              ;;
+            1)
+              # Exit 1 is only the expected fail-fast if the stderr
+              # references the required env var (or the caller-supplied
+              # extra pattern). Otherwise it's a real crash.
+              if [ -z "$REQUIRED_ENV_VAR" ] && [ -z "$FAIL_FAST_PATTERN" ]; then
+                echo "Exit 1 with no fail-fast pattern configured — real crash" >&2
+                exit 1
+              fi
+              matched=false
+              if [ -n "$REQUIRED_ENV_VAR" ]; then
+                default_pat="${REQUIRED_ENV_VAR}.*required|required.*${REQUIRED_ENV_VAR}|${REQUIRED_ENV_VAR}"
+                # `--` terminator: `$default_pat` interpolates a
+                # user-supplied `required-env-var` input that could
+                # start with `-`.
+                if echo "$out" | grep -qEi -- "$default_pat"; then
+                  matched=true
+                fi
+              fi
+              if [ "$matched" = "false" ] && [ -n "$FAIL_FAST_PATTERN" ]; then
+                if echo "$out" | grep -qEi -- "$FAIL_FAST_PATTERN"; then
+                  matched=true
+                fi
+              fi
+              if [ "$matched" = "true" ]; then
+                echo "Startup OK (exit=1 — fail-fast on missing credentials)"
+              else
+                echo "Exit 1 without the expected fail-fast pattern — real crash" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unexpected exit code $ec — only 124 (stdin wait), 0 (lazy-auth, if opted in), or 1 (fail-fast on missing credentials) are healthy" >&2
+              exit 1
+              ;;
+          esac
