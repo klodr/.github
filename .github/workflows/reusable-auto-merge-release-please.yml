@@ -33,10 +33,10 @@ on:
     secrets:
       RELEASE_PLEASE_CLIENT_ID:
         required: true
-        description: 'Client ID of the release-please GitHub App'
+        description: "Client ID of the release-please GitHub App"
       RELEASE_PLEASE_APP_PRIVATE_KEY:
         required: true
-        description: 'PEM private key of the release-please GitHub App'
+        description: "PEM private key of the release-please GitHub App"
 
 permissions:
   contents: read

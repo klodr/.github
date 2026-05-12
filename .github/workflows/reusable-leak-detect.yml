@@ -20,12 +20,12 @@ on:
     inputs:
       patterns-ref:
         type: string
-        default: 'main'
-        description: 'Branch / tag / SHA of klodr/.github_private to use.'
+        default: "main"
+        description: "Branch / tag / SHA of klodr/.github_private to use."
     secrets:
       leak-detect-pat:
         required: true
-        description: 'Fine-grained PAT, Contents:Read on klodr/.github_private only.'
+        description: "Fine-grained PAT, Contents:Read on klodr/.github_private only."
 
 jobs:
   scan:
@@ -74,3 +74,30 @@ jobs:
           set -euo pipefail
           git diff "$BASE_SHA...$HEAD_SHA" \
             | bash .leak-patterns-repo/scripts/scan.sh
+
+      # PR title, body and commit messages are not part of the git diff
+      # but are equally public surface area on a public repo. Re-run the
+      # scanner with those lines synthesised as added-diff lines (prefix
+      # `+ `) so scan.sh's pattern matchers (hostnames, private repo
+      # names, PII regexes, etc.) see them too.
+      - name: Run scanner against PR metadata (title, body, commit messages)
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          LEAK_PATTERNS_DIR: ${{ github.workspace }}/.leak-patterns-repo/leak-patterns
+        run: |
+          set -euo pipefail
+          {
+            printf '+ %s\n' "${PR_TITLE}"
+            # Body may be null when the PR has no description; treat it
+            # as an empty string in that case so the heredoc doesn't break.
+            printf '%s\n' "${PR_BODY:-}" | sed 's/^/+ /'
+            # Walk every commit added by this PR. `%s%n%b` emits subject
+            # line + an empty separator + body; we prefix every emitted
+            # line with `+ ` via awk so the scanner picks them up the
+            # same way it would a diff hunk.
+            git log --format='%s%n%n%b' "${BASE_SHA}..${HEAD_SHA}" \
+              | awk '{ print "+ " $0 }'
+          } | bash .leak-patterns-repo/scripts/scan.sh
