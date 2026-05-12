@@ -1,13 +1,19 @@
 name: CI
 
-# Minimal CI for the klodr/.github meta-repo:
-# - actionlint:  YAML/expression validation of every workflow + composite
-#                action shipped from this repo (a broken reusable workflow
-#                cascades to every klodr/* downstream consumer, so static
-#                validation here is high-leverage).
-# - gitleaks:    secret scan via the same reusable workflow shipped from
-#                this repo — dogfooding the dependency we expose to the
-#                rest of the org.
+# CI for the klodr/.github meta-repo. Every reusable workflow this repo
+# ships is dogfooded here when possible, so a regression in a reusable
+# is caught before it cascades to every klodr/* downstream consumer.
+#
+# Active jobs:
+# - actionlint:    YAML/expression validation of every workflow + composite
+#                  action.
+# - gitleaks:      secret scan via the reusable shipped from this repo.
+# - lint-yaml-md:  yamllint + markdownlint-cli2 via the reusable shipped
+#                  from this repo (dogfood).
+# - shellcheck:    static analysis of every shell template under
+#                  `.github/templates/` (these are copied verbatim into
+#                  every consumer repo, so a regression here ships
+#                  silently to all of them).
 #
 # No status checks are wired into the `main` ruleset yet; that needs to
 # happen in the GitHub UI after the workflow has run green at least once
@@ -48,3 +54,31 @@ jobs:
     # Same-repo reusable workflow — explicit local reference per
     # GitHub docs: `uses: ./.github/workflows/<file>` (no @ref).
     uses: ./.github/workflows/reusable-gitleaks.yml
+
+  lint-yaml-md:
+    name: Lint YAML & Markdown
+    # Dogfood the same reusable we expose to every klodr/* MCP consumer.
+    # If `reusable-lint-yaml-md.yml` regresses, the check fails here
+    # before consumers ever invoke it.
+    uses: ./.github/workflows/reusable-lint-yaml-md.yml
+
+  shellcheck:
+    name: Shellcheck (shared templates)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run shellcheck
+        # `shellcheck` is preinstalled on ubuntu-latest runners (no need
+        # for an external action). Default severity is `style`; we keep
+        # that — info-level findings (SC2016, SC2086 with intentional
+        # word-splitting) are reported but exit 0.
+        shell: bash
+        run: |
+          shellcheck --version
+          shellcheck .github/templates/husky/pre-commit \
+                     .github/templates/husky/pre-push

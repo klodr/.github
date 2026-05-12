@@ -1,2 +1,12 @@
 node_modules/
 .DS_Store
+
+# Test + coverage artefacts (regenerated on every run, never committed).
+coverage/
+.vitest/
+test-results.junit.xml
+
+# Build output (currently unused but reserved — when this repo starts
+# shipping a JS package, `dist/` is the conventional bundle target and
+# must not be committed).
+dist/
