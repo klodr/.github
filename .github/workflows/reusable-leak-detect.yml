@@ -70,34 +70,38 @@ jobs:
         # scan.sh special-cases the `phone-*` patterns: a regex
         # pre-filter extracts 10-digit candidates, then
         # `scripts/validate-phones.mjs` re-validates each via
-        # libphonenumber-js before a finding fires.
+        # libphonenumber-js before a finding fires. Without the
+        # dependency present, `validate-phones.mjs` throws
+        # MODULE_NOT_FOUND on the first candidate and scan.sh `exit 2`s
+        # — by design, since silently skipping the validator would
+        # let unvalidated regex matches surface as findings (the very
+        # bug this two-stage detection is meant to suppress).
         #
-        # `inputs.patterns-ref` lets a caller pin an arbitrary
-        # branch/tag/SHA of klodr/.github_private. Older refs
-        # (anything before the libphonenumber rollout) won't carry a
-        # `package-lock.json` or a `package.json`, and `npm ci`
-        # against either of those refs would exit `EUSAGE` and break
-        # the whole leak-detect job. Probe both files and skip the
-        # install when they're absent — scan.sh's `phone-*` branch
-        # only short-circuits on a missing `validate-phones.mjs`,
-        # which is the actual contract this dependency satisfies.
+        # The dependency version is pinned HERE (not in the patterns
+        # repo) so the install is independent of `inputs.patterns-ref`:
+        # a caller pointing at a pre-libphonenumber ref still gets the
+        # validator-side dep installed. `--prefix .leak-patterns-repo
+        # --no-save --no-package-lock` drops a `node_modules/` next to
+        # the script that imports it (ESM resolution walks parent
+        # directories) without writing into the checkout's own
+        # `package.json` / `package-lock.json`. `--ignore-scripts` is
+        # defense-in-depth against any future transitive postinstall.
         # Node 22 ships with ubuntu-latest.
-        working-directory: .leak-patterns-repo
+        env:
+          LIBPHONENUMBER_VERSION: 1.13.1
         run: |
           set -euo pipefail
-          if [ ! -f package.json ] || [ ! -f package-lock.json ]; then
-            echo "leak-detect: patterns-ref ${{ inputs.patterns-ref }} has no package.json/package-lock.json — skipping npm ci."
-            echo "leak-detect: phone-pattern validation (libphonenumber-js) will be inactive on this run."
-            exit 0
-          fi
           node --version
           npm --version
-          # `--omit=dev --ignore-scripts --no-audit --no-fund` keeps the
-          # install ~3-5s on a clean runner. `--ignore-scripts` matters:
-          # libphonenumber-js doesn't ship lifecycle hooks but pinning
-          # the posture here makes a future transitive `postinstall`
-          # require a deliberate flag flip.
-          npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+          npm install \
+            --prefix .leak-patterns-repo \
+            --no-save \
+            --no-package-lock \
+            --ignore-scripts \
+            --no-audit \
+            --no-fund \
+            "libphonenumber-js@${LIBPHONENUMBER_VERSION}"
+          test -d .leak-patterns-repo/node_modules/libphonenumber-js
 
       - name: Install yq (YAML parser)
         run: |
