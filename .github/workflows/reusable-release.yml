@@ -166,6 +166,34 @@ jobs:
           TEST_SCRIPT: ${{ inputs.test-script }}
         run: npm run "$TEST_SCRIPT"
 
+      # Hand the just-built artifact directory to the publish job so we
+      # never re-run `npm ci` or `npm run build` under the elevated
+      # permissions of `publish`. See the long-form security note on the
+      # `publish` job below.
+      #
+      # We upload the parent directory of `signed-artifact-path` so the
+      # downstream `actions/attest-build-provenance` (which reads
+      # `inputs.signed-artifact-path` directly) finds the file at the
+      # same relative path. For bundled MCPs that's `dist/`. For
+      # plugins that ship src/ unbundled (build-script left empty),
+      # `src/` is already on the publish checkout so no artifact is
+      # needed.
+      - name: Compute build artifact directory
+        if: inputs.build-script != ''
+        id: build_artifact
+        env:
+          SIGNED_ARTIFACT_PATH: ${{ inputs.signed-artifact-path }}
+        run: echo "dir=$(dirname "$SIGNED_ARTIFACT_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact for publish job
+        if: inputs.build-script != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-build
+          path: ${{ steps.build_artifact.outputs.dir }}
+          retention-days: 1
+          if-no-files-found: error
+
   publish:
     name: Create release, sign artifacts, publish to npm
     needs: build
@@ -176,33 +204,58 @@ jobs:
       id-token: write # npm provenance + Sigstore keyless signing
       attestations: write # actions/attest-build-provenance writes to the attestation API
     steps:
+      # SECURITY: this job runs with `contents: write` + `id-token: write`
+      # + `attestations: write`. Re-running `npm ci` + `npm run build`
+      # here would let a malicious dependency lifecycle script
+      # (postinstall, preinstall, prepare, …) execute under those
+      # permissions and:
+      #   - mint OIDC tokens for npm provenance / Sigstore signing,
+      #   - tamper with the release / tag via the checkout token,
+      #   - rewrite GitHub attestations.
+      # The `build` job above runs the same install + build under
+      # `contents: read`, validates with tests, and uploads the
+      # resulting artifact directory. The publish job consumes that
+      # artifact verbatim — no install, no build. `package.json`,
+      # `package-lock.json`, `CHANGELOG.md`, `README.md` and `LICENSE`
+      # come from the read-only checkout below.
+      #
+      # `persist-credentials: false` strips the checkout's write-scoped
+      # git token from `.git/config`. The job only uses `gh release …`
+      # (authenticated via `GH_TOKEN` env) and `npm publish`; nothing
+      # pushes to git. Removing the persisted credential closes the
+      # last residual path through which a non-script attack (e.g. an
+      # `npm pkg` operation hijacked via a malformed `package.json`)
+      # could reach `git push`.
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Setup Node ${{ inputs.node-version }}
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ inputs.node-version }}
-          cache: "npm"
+          # No `cache: "npm"` — the publish job never runs `npm ci`,
+          # so there is nothing to cache and no cache to restore.
           registry-url: "https://registry.npmjs.org"
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build (production, sourcemaps stripped)
+      # Pull the artifact built (and tested) by the read-only `build`
+      # job. For plugins that ship `src/` unbundled (build-script left
+      # empty), the artifact lives in the checkout already and these
+      # two steps are skipped.
+      - name: Compute build artifact directory (download target)
         if: inputs.build-script != ''
+        id: build_artifact_dl
         env:
-          NODE_ENV: production
-          BUILD_SCRIPT: ${{ inputs.build-script }}
-        run: npm run "$BUILD_SCRIPT"
+          SIGNED_ARTIFACT_PATH: ${{ inputs.signed-artifact-path }}
+        run: echo "dir=$(dirname "$SIGNED_ARTIFACT_PATH")" >> "$GITHUB_OUTPUT"
 
-      # npm ci above runs without NODE_ENV=production, so it installs the
-      # devDependencies needed to build. Now that the artifact is ready,
-      # prune them so the SBOM reflects the RUNTIME dependency tree, not
-      # the build toolchain — otherwise downstream scanners flag tsup /
-      # typescript / vitest CVEs that can't reach a consumer's process.
-      - name: Prune devDependencies before SBOM generation
-        run: npm prune --omit=dev
+      - name: Download build artifact
+        if: inputs.build-script != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-build
+          path: ${{ steps.build_artifact_dl.outputs.dir }}
 
       # Extract the CHANGELOG section for this version. Fail fast if
       # missing, so we never publish a version with no notes.
@@ -262,10 +315,13 @@ jobs:
         with:
           subject-path: ${{ inputs.signed-artifact-path }}
 
-      # SBOMs of the runtime dependency tree (devDependencies pruned
-      # above). syft walks the lockfile + node_modules and produces SPDX
-      # (json) + CycloneDX (json) — both shipped so downstream consumers
-      # can pick whichever their scanner speaks.
+      # SBOMs of the runtime dependency tree. The publish job runs no
+      # install, so there is no `node_modules/` to walk. syft falls
+      # back to its npm-package-lock cataloger and reads
+      # `package-lock.json` directly — the lockfile carries `dev: true`
+      # flags so devDependencies are correctly excluded from the
+      # output. Both SPDX (json) and CycloneDX (json) are emitted so
+      # downstream consumers can pick whichever their scanner speaks.
       - name: Compute SBOM output paths
         id: sbom_paths
         env:
@@ -399,17 +455,19 @@ jobs:
             --repo "${{ github.repository }}" \
             --clobber
 
-      # `npm prune --omit=dev` above removed any build / test tooling
-      # that lives in devDependencies (tsup, husky, vitest, ...). Any
-      # lifecycle script that still references one of those will fail at
-      # publish time:
+      # The publish job runs no install, so devDependencies (tsup,
+      # husky, vitest, …) are not on disk here. Any lifecycle script
+      # that references one of those would fail at publish time:
       #   - `prepublishOnly: npm run build` would re-run the bundler
       #   - `prepare: husky` would re-run husky (`husky: not found`)
       #
       # `--ignore-scripts` is documented to skip lifecycle scripts at
       # publish time, but in practice npm 10.9 still runs `prepare`
       # during the pack/publish prep. Stripping those keys from
-      # `package.json` is the robust fix.
+      # `package.json` is the robust fix and also matches our
+      # defense-in-depth posture (the artifact comes from `build`; we
+      # don't want the publish job to re-derive it from package.json
+      # scripts under elevated permissions either).
       #
       # NOTE: npm always includes `package.json` in the tarball
       # regardless of the `files` field, so the *published* manifest

