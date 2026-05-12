@@ -24,7 +24,8 @@
   },
   "lint-staged": {
     "*.{yml,yaml}": [
-      "prettier --write"
+      "prettier --write",
+      "yamllint"
     ],
     "*.md": [
       "prettier --write",
