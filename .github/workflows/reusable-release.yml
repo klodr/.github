@@ -183,7 +183,22 @@ jobs:
         id: build_artifact
         env:
           SIGNED_ARTIFACT_PATH: ${{ inputs.signed-artifact-path }}
-        run: echo "dir=$(dirname "$SIGNED_ARTIFACT_PATH")" >> "$GITHUB_OUTPUT"
+        # Fail fast on a root-level signed-artifact-path (e.g.
+        # `index.js`). `dirname "index.js"` is `.`, and uploading the
+        # workspace root would ship every source file, secret-bearing
+        # config, and `.git/` content into the artifact — far beyond
+        # the intended bundle. Documented callers use `dist/index.js`
+        # or leave `build-script` empty (in which case this step is
+        # skipped). Reject anything else explicitly.
+        run: |
+          set -euo pipefail
+          DIR=$(dirname "$SIGNED_ARTIFACT_PATH")
+          if [ "$DIR" = "." ] || [ "$DIR" = "/" ]; then
+            echo "ERROR: signed-artifact-path '$SIGNED_ARTIFACT_PATH' resolves to '$DIR' — refusing to upload the workspace root as a build artifact." >&2
+            echo "       Use a subdirectory (e.g. 'dist/index.js') or leave 'build-script' empty." >&2
+            exit 1
+          fi
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Upload build artifact for publish job
         if: inputs.build-script != ''
@@ -248,7 +263,18 @@ jobs:
         id: build_artifact_dl
         env:
           SIGNED_ARTIFACT_PATH: ${{ inputs.signed-artifact-path }}
-        run: echo "dir=$(dirname "$SIGNED_ARTIFACT_PATH")" >> "$GITHUB_OUTPUT"
+        # Mirror the build job's guard so a root-level
+        # `signed-artifact-path` can never reach the download step.
+        # (The upstream build job's guard would already have aborted,
+        # so this is belt-and-suspenders.)
+        run: |
+          set -euo pipefail
+          DIR=$(dirname "$SIGNED_ARTIFACT_PATH")
+          if [ "$DIR" = "." ] || [ "$DIR" = "/" ]; then
+            echo "ERROR: signed-artifact-path '$SIGNED_ARTIFACT_PATH' resolves to '$DIR' — refusing to expand into the workspace root." >&2
+            exit 1
+          fi
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifact
         if: inputs.build-script != ''
