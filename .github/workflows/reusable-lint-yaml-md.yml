@@ -50,6 +50,9 @@ on:
         default: "."
         description: "Path(s) to scan with yamllint. Defaults to repo root."
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint YAML & Markdown
