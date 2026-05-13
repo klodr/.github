@@ -32,6 +32,9 @@ on:
         required: true
         description: "GitHub App private key (PEM) for the leak-detect bot."
 
+permissions:
+  contents: read
+
 jobs:
   scan:
     name: Scan PR diff
