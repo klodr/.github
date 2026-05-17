@@ -1,0 +1,32 @@
+name: Leak detect (private patterns)
+
+# Scans the PR diff plus PR metadata (title, body, commit messages)
+# against the centrally-maintained pattern set. Catches accidental
+# disclosure of internal hostnames, infra slugs, PII regexes, etc.
+# that the public OSS scanners (gitleaks) don't know about.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  leak-detect:
+    name: Leak detect
+    # Skip on PRs from forks AND Dependabot. GitHub does not expose
+    # repository secrets to fork-origin or Dependabot-actor PRs.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    uses: ./.github/workflows/reusable-leak-detect.yml
+    secrets:
+      leak-detect-client-id: ${{ secrets.LEAK_DETECT_CLIENT_ID }}
+      leak-detect-app-private-key: ${{ secrets.LEAK_DETECT_APP_PRIVATE_KEY }}
