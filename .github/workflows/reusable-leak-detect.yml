@@ -6,7 +6,6 @@
 #     leak-detect:
 #       uses: klodr/.github/.github/workflows/reusable-leak-detect.yml@<sha>
 #       secrets:
-#         leak-detect-app-id: ${{ secrets.LEAK_DETECT_APP_ID }}
 #         leak-detect-app-private-key: ${{ secrets.LEAK_DETECT_APP_PRIVATE_KEY }}
 #
 # The GitHub App backing those secrets must be installed on
@@ -25,9 +24,6 @@ on:
         default: "main"
         description: "Branch / tag / SHA of klodr/.github_private to use."
     secrets:
-      leak-detect-app-id:
-        required: true
-        description: "GitHub App ID (Integer, e.g. 3684272). Used directly as JWT iss claim. The Client ID is also accepted by /app/installations but not by the per-installation routes used to scope the token — see the inline-JWT step for the rationale."
       leak-detect-app-private-key:
         required: true
         description: "GitHub App private key (PEM) for the leak-detect bot."
@@ -68,7 +64,14 @@ jobs:
         id: app-token
         shell: bash
         env:
-          APP_ID: ${{ secrets.leak-detect-app-id }}
+          # App ID is hardcoded here on purpose: GitHub Actions masks
+          # secret values at runtime even inside the step's env block
+          # (the env var is literally "***" inside python), so the
+          # secret-based path returns int('***') → ValueError. App IDs
+          # are public anyway — visible on https://github.com/apps/<slug>
+          # and in every JWT iss claim that ever ships. Only the
+          # private key needs to be a secret.
+          APP_ID: "3684272" # klodr-leak-detect
           APP_PRIVATE_KEY: ${{ secrets.leak-detect-app-private-key }}
         run: |
           set -euo pipefail
