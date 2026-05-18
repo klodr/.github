@@ -26,8 +26,11 @@ on:
         description: "Branch / tag / SHA of klodr/.github_private to use."
     secrets:
       leak-detect-client-id:
+        required: false
+        description: "GitHub App Client ID (Iv-prefix). Kept for future use when GitHub fully migrates."
+      leak-detect-app-id:
         required: true
-        description: "GitHub App Client ID for the leak-detect bot."
+        description: "GitHub App ID (Integer). Used as JWT iss — the /repos/{owner}/{repo}/installation endpoint still requires Integer App ID, not Client ID."
       leak-detect-app-private-key:
         required: true
         description: "GitHub App private key (PEM) for the leak-detect bot."
@@ -49,15 +52,19 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
-          # Pass the GitHub App Client ID via `app-id` rather than
-          # `client-id`. v3.1.1's `client-id` path signs the JWT with
-          # iss=<client-id-string> and the GitHub backend (specifically
-          # /repos/{owner}/{repo}/installation) refuses non-Integer
-          # iss with HTTP 401 "'Issuer' claim ('iss') must be an
-          # Integer". `app-id` is forwarded to @octokit/auth-app's
-          # `appId` field which accepts both Integer App ID and string
-          # Client ID (Iv-prefix); octokit handles the iss accordingly.
-          app-id: ${{ secrets.leak-detect-client-id }}
+          # GitHub secrets are always strings, but the JWT iss field
+          # is checked as JSON Integer by /repos/{owner}/{repo}/installation
+          # (the endpoint the action uses to scope the token). Wrap
+          # the secret in fromJSON() so the string "3684272" becomes
+          # the JSON number 3684272 before being passed through octokit
+          # to the JWT iss claim. Without this cast, iss is the string
+          # "3684272" and GitHub returns 401 'iss must be Integer'.
+          #
+          # The legacy `app-id` input is used (not `client-id`) because
+          # the Client-ID-as-iss code path in /repos/.../installation is
+          # not yet implemented server-side (May 2026) despite the
+          # GitHub docs presenting Client ID as the recommended form.
+          app-id: ${{ fromJSON(secrets.leak-detect-app-id) }}
           private-key: ${{ secrets.leak-detect-app-private-key }}
           owner: klodr
           repositories: .github_private
