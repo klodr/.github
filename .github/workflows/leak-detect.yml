@@ -28,5 +28,4 @@ jobs:
       && github.event.pull_request.user.login != 'dependabot[bot]'
     uses: ./.github/workflows/reusable-leak-detect.yml
     secrets:
-      leak-detect-client-id: ${{ secrets.LEAK_DETECT_CLIENT_ID }}
       leak-detect-app-private-key: ${{ secrets.LEAK_DETECT_APP_PRIVATE_KEY }}

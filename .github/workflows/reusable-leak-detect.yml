@@ -6,7 +6,6 @@
 #     leak-detect:
 #       uses: klodr/.github/.github/workflows/reusable-leak-detect.yml@<sha>
 #       secrets:
-#         leak-detect-client-id: ${{ secrets.LEAK_DETECT_CLIENT_ID }}
 #         leak-detect-app-private-key: ${{ secrets.LEAK_DETECT_APP_PRIVATE_KEY }}
 #
 # The GitHub App backing those secrets must be installed on
@@ -25,9 +24,6 @@ on:
         default: "main"
         description: "Branch / tag / SHA of klodr/.github_private to use."
     secrets:
-      leak-detect-client-id:
-        required: true
-        description: "GitHub App Client ID for the leak-detect bot."
       leak-detect-app-private-key:
         required: true
         description: "GitHub App private key (PEM) for the leak-detect bot."
@@ -45,30 +41,89 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Generate App token (owner-scoped to klodr)
+      - name: Generate App installation token (inline JWT)
+        # GitHub's per-installation token endpoints
+        # (/repos/{owner}/{repo}/installation, /users/{user}/installation,
+        # /app/installations/{id}/access_tokens) require the JWT `iss`
+        # claim to be the integer App ID — they reject the
+        # `Iv...`-prefix Client ID even though the GitHub docs present
+        # Client ID as the recommended form for JWT auth in May 2026.
+        # actions/create-github-app-token@v3.x reads its `app-id` /
+        # `client-id` input via core.getInput() (always a string) and
+        # forwards it to octokit-auth-app, which then signs the JWT
+        # with iss=<string>. The result is HTTP 401 'iss must be an
+        # Integer' on every install-scoped call. Both the v3.1.1 and
+        # v3.2.0 input paths share this codepath; there is no input cast
+        # we can apply that survives core.getInput().
+        #
+        # Sign the JWT directly with iss=App-ID-as-JSON-number, exchange
+        # it for an installation token, mask the token, and expose it
+        # via `steps.app-token.outputs.token` exactly like the action
+        # used to. PyJWT + cryptography are available out of the box on
+        # ubuntu-latest's python3.
         id: app-token
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
-        with:
-          # Use the owner-installation endpoint /users/klodr/installation
-          # rather than the repo-scoped /repos/{owner}/{repo}/installation.
-          # The repo-scoped path still requires the JWT iss claim to be
-          # a JSON Integer (the App ID), even when called via the
-          # `client-id` input — GitHub's "Client ID is the recommended
-          # form" docs haven't been fully implemented server-side
-          # (May 2026). Symptom: 401 "'Issuer' claim ('iss') must be
-          # an Integer". Note that core.getInput() returns secrets as
-          # strings, so wrapping with fromJSON() at the call site is a
-          # no-op — the value still arrives as a string at the action.
-          #
-          # Dropping `repositories:` switches the action to
-          # getTokenFromOwner, which calls /users/{owner}/installation —
-          # an endpoint that accepts iss=Client-ID string. The resulting
-          # token is scoped to the App's klodr installation (still
-          # restricted by Repository permissions: Contents Read on
-          # klodr/.github_private only) and lives one job.
-          client-id: ${{ secrets.leak-detect-client-id }}
-          private-key: ${{ secrets.leak-detect-app-private-key }}
-          owner: klodr
+        shell: bash
+        env:
+          # App ID is hardcoded here on purpose: GitHub Actions masks
+          # secret values at runtime even inside the step's env block
+          # (the env var is literally "***" inside python), so the
+          # secret-based path returns int('***') → ValueError. App IDs
+          # are public anyway — visible on https://github.com/apps/<slug>
+          # and in every JWT iss claim that ever ships. Only the
+          # private key needs to be a secret.
+          APP_ID: "3684272" # klodr-leak-detect
+          APP_PRIVATE_KEY: ${{ secrets.leak-detect-app-private-key }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet --user 'PyJWT[crypto]==2.10.1'
+          token=$(python3 - <<'PY'
+          import json, os, sys, time, urllib.request
+          import jwt
+
+          app_id = int(os.environ['APP_ID'])
+          private_key = os.environ['APP_PRIVATE_KEY']
+
+          now = int(time.time())
+          jwt_token = jwt.encode(
+              {'iat': now - 60, 'exp': now + 540, 'iss': app_id},
+              private_key,
+              algorithm='RS256',
+          )
+
+          def gh(path, method='GET', body=None):
+              req = urllib.request.Request(
+                  f'https://api.github.com{path}',
+                  data=(json.dumps(body).encode() if body else None),
+                  method=method,
+                  headers={
+                      'Authorization': f'Bearer {jwt_token}',
+                      'Accept': 'application/vnd.github+json',
+                      'X-GitHub-Api-Version': '2022-11-28',
+                      'User-Agent': 'klodr-leak-detect-jwt',
+                      **({'Content-Type': 'application/json'} if body else {}),
+                  },
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  return json.loads(resp.read() or b'null')
+
+          # Find the installation on klodr/.github_private specifically — the
+          # App is also installed on the rest of klodr/* via "All repositories"
+          # but this token only needs Contents:Read on the patterns repo.
+          inst = gh('/repos/klodr/.github_private/installation')
+          token = gh(
+              f'/app/installations/{inst["id"]}/access_tokens',
+              method='POST',
+              body={'repositories': ['.github_private'],
+                    'permissions': {'contents': 'read'}},
+          )['token']
+          sys.stdout.write(token)
+          PY
+          )
+          # Mask the token in any subsequent log line + expose it as an
+          # output for the rest of the workflow (same surface as
+          # actions/create-github-app-token's `outputs.token`).
+          echo "::add-mask::$token"
+          echo "token=$token" >>"$GITHUB_OUTPUT"
 
       - name: Checkout caller repo (full history for diff)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
