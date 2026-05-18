@@ -45,22 +45,30 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - name: Generate App token (scoped to klodr/.github_private)
+      - name: Generate App token (owner-scoped to klodr)
         id: app-token
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
         with:
-          # Pass the GitHub App Client ID via `app-id` rather than
-          # `client-id`. v3.1.1's `client-id` path signs the JWT with
-          # iss=<client-id-string> and the GitHub backend (specifically
-          # /repos/{owner}/{repo}/installation) refuses non-Integer
-          # iss with HTTP 401 "'Issuer' claim ('iss') must be an
-          # Integer". `app-id` is forwarded to @octokit/auth-app's
-          # `appId` field which accepts both Integer App ID and string
-          # Client ID (Iv-prefix); octokit handles the iss accordingly.
-          app-id: ${{ secrets.leak-detect-client-id }}
+          # Use the owner-installation endpoint /users/klodr/installation
+          # rather than the repo-scoped /repos/{owner}/{repo}/installation.
+          # The repo-scoped path still requires the JWT iss claim to be
+          # a JSON Integer (the App ID), even when called via the
+          # `client-id` input — GitHub's "Client ID is the recommended
+          # form" docs haven't been fully implemented server-side
+          # (May 2026). Symptom: 401 "'Issuer' claim ('iss') must be
+          # an Integer". Note that core.getInput() returns secrets as
+          # strings, so wrapping with fromJSON() at the call site is a
+          # no-op — the value still arrives as a string at the action.
+          #
+          # Dropping `repositories:` switches the action to
+          # getTokenFromOwner, which calls /users/{owner}/installation —
+          # an endpoint that accepts iss=Client-ID string. The resulting
+          # token is scoped to the App's klodr installation (still
+          # restricted by Repository permissions: Contents Read on
+          # klodr/.github_private only) and lives one job.
+          client-id: ${{ secrets.leak-detect-client-id }}
           private-key: ${{ secrets.leak-detect-app-private-key }}
           owner: klodr
-          repositories: .github_private
 
       - name: Checkout caller repo (full history for diff)
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
