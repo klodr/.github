@@ -85,6 +85,19 @@ jobs:
           path: .leak-patterns-repo
           persist-credentials: false
 
+      - name: Setup Node 22.22.2+ (klodr CVE-floor)
+        # ubuntu-latest currently ships Node v20.x; klodr/.github_private's
+        # package.json declares `engines.node: ">=22.22.2"` so the libphone
+        # install below fails with EBADENGINE on the default runner Node.
+        # Pin the exact engines floor (not just major "22") so a stale
+        # cached 22.x < 22.22.2 on the runner does not slip through. The
+        # version string here mirrors klodr/.github_private/package.json
+        # engines and should be bumped in lockstep.
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22.22.2"
+          check-latest: true
+
       - name: Install libphonenumber-js (phone validation in scan.sh)
         # scan.sh special-cases the `phone-*` patterns: a regex
         # pre-filter extracts 10-digit candidates, then
@@ -105,7 +118,9 @@ jobs:
         # directories) without writing into the checkout's own
         # `package.json` / `package-lock.json`. `--ignore-scripts` is
         # defense-in-depth against any future transitive postinstall.
-        # Node 22 ships with ubuntu-latest.
+        # Node 22 is provisioned by the preceding setup-node step (the
+        # default ubuntu-latest Node is v20, which would fail the
+        # `engines.node: ">=22.22.2"` constraint on klodr/.github_private).
         env:
           LIBPHONENUMBER_VERSION: 1.13.1
         run: |
