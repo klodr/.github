@@ -34,7 +34,26 @@ permissions:
 jobs:
   scan:
     name: Scan PR diff
-    if: github.event_name == 'pull_request'
+    # Skip on any bot-authored PR (`<slug>[bot]` actor login).
+    # Two reasons combined:
+    #
+    # 1. Bots can't reach the `leak-detect-app-private-key` secret —
+    #    Dependabot has its own secret store and most GitHub-App bots
+    #    run without access to standard Actions secrets, so the inline
+    #    JWT signing step receives an empty APP_PRIVATE_KEY and fails
+    #    before any scan runs.
+    # 2. Bot PRs are not new external-contributor code paths: Dependabot
+    #    bumps actions/deps, release-please carries a generated CHANGELOG
+    #    + version bump, github-actions[bot] runs maintenance tasks the
+    #    repo admins authored. At the bot-PR stage, anything secret-
+    #    leaking would already have leaked upstream of this gate.
+    #
+    # Adding/replacing a bot requires admin write on the repo, so the
+    # threat model that this filter enables (unscanned bot PRs) requires
+    # an attacker who is already inside.
+    if: >-
+      github.event_name == 'pull_request'
+      && !endsWith(github.actor, '[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
