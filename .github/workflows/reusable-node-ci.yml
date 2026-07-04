@@ -169,7 +169,7 @@ jobs:
 
       - name: Upload coverage
         if: ${{ inputs.enable-codecov-upload && matrix.node == inputs.coverage-node-version }}
-        uses: klodr/.github/.github/actions/codecov-upload@7a292dd655923e16a70e2a3dacda4b4035fc0443 # main @ 2026-07-04 (codecov-action v7)
+        uses: klodr/.github/.github/actions/codecov-upload@25fd33134a76ce507014eafdb5a29619f46a5fd7 # main @ 2026-07-04 (codecov-action v7.0.0 real commit)
         with:
           slug: ${{ inputs.codecov-slug }}
 
