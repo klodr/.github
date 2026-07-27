@@ -38,5 +38,9 @@
     "*.{json,jsonc,json5}": [
       "prettier --write"
     ]
+  },
+  "overrides": {
+    "fast-uri": "3.1.4",
+    "js-yaml@^5.0.0": "5.2.2"
   }
 }
