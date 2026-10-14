@@ -19,11 +19,11 @@ cross-repo diff sweep:
 ```sh
 # Quick drift check — run from the klodr/.github repo root (the
 # template path below is repo-relative). With the 5 consumer repos
-# cloned under ~/git/.
+# cloned under ~/dev/git/.
 for r in eslint-plugin-security-mcp gmail-mcp faxdrop-mcp \
          mercury-invoicing-mcp relayfi-mcp; do
   diff -u .github/templates/husky/pre-push \
-        ~/git/$r/.husky/pre-push >/dev/null \
+        ~/dev/git/$r/.husky/pre-push >/dev/null \
     && echo "$r OK" \
     || echo "$r DRIFTED"
 done
