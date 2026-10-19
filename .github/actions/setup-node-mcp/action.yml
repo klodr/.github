@@ -7,9 +7,10 @@ description: >
 
 inputs:
   node-version:
-    description: Node.js version to provision (e.g. "22", "24").
+    description: Node.js version to provision (e.g. "24", "26").
     required: false
-    default: "22"
+    # Current Node line; callers pass the matrix value explicitly.
+    default: "26"
   package-manager:
     description: Package manager driving the install step (npm | pnpm | yarn).
     required: false

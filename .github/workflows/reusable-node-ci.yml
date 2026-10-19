@@ -39,7 +39,8 @@ on:
         description: "Whether lint-format runs prettier --check (false for repos without prettier)."
       lint-node-version:
         type: string
-        default: "22"
+        # Current Node line (26); the matrix below keeps the supported floor (24).
+        default: "26"
         description: "Node version used for the lint job."
 
       # ---- Build & Test job ----
@@ -53,15 +54,18 @@ on:
         description: "Job display name (must match ruleset required-status-checks)."
       node-versions:
         type: string
-        default: '["22", "24"]'
-        description: 'JSON array of Node versions (matrix). Example: ''["22"]'' or ''["22","24"]''.'
+        # Supported floor (24, the oldest non-EOL line the klodr MCP servers
+        # target, as the official MCP reference servers do) + the current line (26).
+        default: '["24", "26"]'
+        description: 'JSON array of Node versions (matrix). Example: ''["26"]'' or ''["24","26"]''.'
       enable-build-step:
         type: boolean
         default: true
         description: "Run `npm run build` before tests (false for plugins with no build step)."
       coverage-node-version:
         type: string
-        default: "22"
+        # Coverage on the current line.
+        default: "26"
         description: "Node version on which coverage runs. Other versions run plain `npm test`."
       coverage-strategy:
         type: string
