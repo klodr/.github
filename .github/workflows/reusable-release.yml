@@ -78,7 +78,8 @@ on:
       node-version:
         description: "Node.js version used for build + publish."
         type: string
-        default: "22"
+        # Current Node line; its bundled npm (11.x) supports npm trusted publishing (OIDC).
+        default: "26"
       build-script:
         description: >-
           npm script for the production build. Empty string disables the
