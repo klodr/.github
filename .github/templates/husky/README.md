@@ -18,10 +18,10 @@ cross-repo diff sweep:
 
 ```sh
 # Quick drift check — run from the klodr/.github repo root (the
-# template path below is repo-relative). With the 5 consumer repos
-# cloned under ~/dev/git/.
+# template path below is repo-relative). With the consumer repos
+# cloned under ~/dev/git/ (add any private consumer to the list).
 for r in eslint-plugin-security-mcp gmail-mcp faxdrop-mcp \
-         mercury-invoicing-mcp relayfi-mcp; do
+         mercury-invoicing-mcp; do
   diff -u .github/templates/husky/pre-push \
         ~/dev/git/$r/.husky/pre-push >/dev/null \
     && echo "$r OK" \
